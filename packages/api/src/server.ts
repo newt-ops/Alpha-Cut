@@ -1,8 +1,14 @@
-import express, { type Express } from "express";
+import express, { type Express, Request, Response, NextFunction } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import dotenv from "dotenv";
+import { connectDB } from "./db.js";
+import authRouter from "./routes/auth.js";
+import inquiriesRouter from "./routes/inquiries.js";
+import projectsRouter from "./routes/projects.js";
+import financesRouter from "./routes/finances.js";
+import telegramRouter from "./routes/telegram.js";
 
 dotenv.config();
 
@@ -20,8 +26,15 @@ app.use(
 app.use(cookieParser());
 app.use(express.json());
 
-// Basic health check route
-app.get("/api/health", (_req, res) => {
+// Routes
+app.use("/api/auth", authRouter);
+app.use("/api/inquiries", inquiriesRouter);
+app.use("/api/projects", projectsRouter);
+app.use("/api/finances", financesRouter);
+app.use("/api/telegram", telegramRouter);
+
+// Health check
+app.get("/api/health", (_req: Request, res: Response) => {
   res.status(200).json({
     status: "ok",
     service: "alpha-cut-api",
@@ -29,9 +42,31 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`[Alpha Cut API] Server running on port ${PORT}`);
+// Centralized error handler
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  console.error("[Unhandled API Error]:", err);
+  res.status(500).json({
+    error: "Internal Server Error",
+    message: process.env.NODE_ENV === "development" ? err.message : undefined,
+  });
 });
 
-export default app;
+async function startServer() {
+  try {
+    // Attempt DB connection (non-blocking if local DB offline in dev)
+    connectDB().catch((err) => {
+      console.warn("[MongoDB Warning] Database not currently reachable. Ensure MongoDB Atlas URI is set in .env:", err.message);
+    });
 
+    app.listen(PORT, () => {
+      console.log(`[Alpha Cut API] Server running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("[Fatal API Error]:", error);
+    process.exit(1);
+  }
+}
+
+startServer();
+
+export default app;
