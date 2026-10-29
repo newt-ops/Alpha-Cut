@@ -5,6 +5,7 @@ import { HomePage } from "./pages/HomePage.js";
 import { LoginPage } from "./pages/auth/LoginPage.js";
 import { RegisterPage } from "./pages/auth/RegisterPage.js";
 import { ClientPortalPage } from "./pages/portal/ClientPortalPage.js";
+import { AdminERPPage } from "./pages/admin/AdminERPPage.js";
 import { PrivacyPage } from "./pages/legal/PrivacyPage.js";
 import { TermsPage } from "./pages/legal/TermsPage.js";
 import { DisclaimerPage } from "./pages/legal/DisclaimerPage.js";
@@ -23,6 +24,9 @@ export default function App() {
 
         {/* Client Portal */}
         <Route path="/portal/*" element={<ClientPortalPage />} />
+
+        {/* Agency ERP Dashboard (Super Admin) */}
+        <Route path="/admin/*" element={<AdminERPPage />} />
 
         {/* 4 Mandatory Legal Compliance Pages */}
         <Route path="/privacy" element={<PrivacyPage />} />
