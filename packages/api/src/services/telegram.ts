@@ -9,8 +9,9 @@ const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
 /**
  * Validates Telegram Mini App initData signature according to official Telegram spec
  */
-export function verifyTelegramInitData(initData: string): { isValid: boolean; user?: any } {
-  if (!BOT_TOKEN || !initData) {
+export function verifyTelegramInitData(initData: string, tokenOverride?: string): { isValid: boolean; user?: any } {
+  const token = tokenOverride || BOT_TOKEN;
+  if (!token || !initData) {
     return { isValid: false };
   }
 
@@ -26,7 +27,7 @@ export function verifyTelegramInitData(initData: string): { isValid: boolean; us
       .map(([k, v]) => `${k}=${v}`)
       .join("\n");
 
-    const secretKey = crypto.createHmac("sha256", "WebAppData").update(BOT_TOKEN).digest();
+    const secretKey = crypto.createHmac("sha256", "WebAppData").update(token).digest();
     const calculatedHash = crypto.createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
 
     if (calculatedHash !== hash) {
