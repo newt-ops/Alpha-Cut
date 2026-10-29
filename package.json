@@ -1,0 +1,19 @@
+{
+  "name": "alpha-cut",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Alpha Cut Agency Monorepo",
+  "packageManager": "pnpm@12.3.4",
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" --filter \"./packages/api\" dev",
+    "build": "pnpm --recursive build",
+    "lint": "pnpm --recursive lint",
+    "typecheck": "pnpm --recursive typecheck",
+    "clean": "pnpm --recursive exec -- rm -rf dist .turbo node_modules"
+  },
+  "devDependencies": {
+    "prettier": "^3.5.0",
+    "typescript": "^5.7.3"
+  }
+}
+
