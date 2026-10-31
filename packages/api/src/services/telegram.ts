@@ -119,3 +119,43 @@ export async function notifyAdmins(text: string, replyMarkup?: any, parseMode?: 
     console.log(`[Telegram Admin Notification]:\n${text}`);
   }
 }
+
+/**
+ * Edits an existing Telegram message in-place (e.g. after callback button tap)
+ */
+export async function editTelegramMessageText(params: {
+  chatId: string | number;
+  messageId: number;
+  text: string;
+  parseMode?: "HTML" | "Markdown" | "MarkdownV2";
+  replyMarkup?: any;
+}): Promise<boolean> {
+  if (!BOT_TOKEN) {
+    console.log(`[Telegram Mock Edit] Message ${params.messageId} in ${params.chatId}: ${params.text}`);
+    return true;
+  }
+
+  try {
+    const url = `https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: params.chatId,
+        message_id: params.messageId,
+        text: params.text,
+        parse_mode: params.parseMode || "HTML",
+        reply_markup: params.replyMarkup,
+      }),
+    });
+
+    const data = await response.json();
+    if (!data.ok) {
+      console.error("[Telegram API Edit Error]:", data.description);
+    }
+    return data.ok;
+  } catch (error) {
+    console.error("[Telegram API Edit Error] Failed to edit message:", error);
+    return false;
+  }
+}

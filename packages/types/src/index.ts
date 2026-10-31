@@ -13,27 +13,76 @@ export const UserSchema = z.object({
   email: z.string().email("Invalid email address"),
   passwordHash: z.string().optional(),
   role: UserRoleSchema.default("client"),
+  emailVerified: z.boolean().default(false),
+  emailVerifiedAt: z.string().or(z.date()).optional(),
+  emailVerificationCode: z.string().optional(),
+  emailVerificationToken: z.string().optional(),
+  emailVerificationExpires: z.string().or(z.date()).optional(),
   telegramId: z.string().optional(),
   telegramUsername: z.string().optional(),
+  telegramLinkedAt: z.string().or(z.date()).optional(),
+  googleId: z.string().optional(),
+  brandName: z.string().optional(),
   avatarUrl: z.string().optional(),
   createdAt: z.string().or(z.date()).optional(),
   updatedAt: z.string().or(z.date()).optional()
 });
 export type User = z.infer<typeof UserSchema>;
 
+export const VerifyEmailInputSchema = z.object({
+  code: z.string().optional(),
+  token: z.string().optional(),
+  email: z.string().email().optional(),
+});
+export type VerifyEmailInput = z.infer<typeof VerifyEmailInputSchema>;
+
+export const ResendVerificationInputSchema = z.object({
+  email: z.string().email().optional(),
+});
+export type ResendVerificationInput = z.infer<typeof ResendVerificationInputSchema>;
+
+export interface TelegramBindToken {
+  _id?: string;
+  token: string;
+  userId: string;
+  clientEmail: string;
+  createdAt: Date | string;
+  expiresAt: Date | string;
+}
+
 export const RegisterInputSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   email: z.string().email("Valid email required"),
   password: z.string().min(8, "Password must be at least 8 characters"),
-  telegramUsername: z.string().optional()
+  telegramUsername: z.string().optional(),
+  brandName: z.string().optional(),
 });
 export type RegisterInput = z.infer<typeof RegisterInputSchema>;
 
 export const LoginInputSchema = z.object({
   email: z.string().email("Valid email required"),
-  password: z.string().min(1, "Password required")
+  password: z.string().min(1, "Password required"),
+  rememberMe: z.boolean().optional(),
 });
 export type LoginInput = z.infer<typeof LoginInputSchema>;
+
+export const GoogleAuthInputSchema = z.object({
+  credential: z.string().min(1, "Google credential required"),
+});
+export type GoogleAuthInput = z.infer<typeof GoogleAuthInputSchema>;
+
+export const ChangePasswordSchema = z.object({
+  oldPassword: z.string().min(1, "Current password required"),
+  newPassword: z.string().min(8, "New password must be at least 8 characters"),
+});
+export type ChangePasswordInput = z.infer<typeof ChangePasswordSchema>;
+
+export const UpdateProfileSchema = z.object({
+  name: z.string().min(2, "Name must be at least 2 characters").optional(),
+  telegramUsername: z.string().optional(),
+  brandName: z.string().optional(),
+});
+export type UpdateProfileInput = z.infer<typeof UpdateProfileSchema>;
 
 // ==========================================
 // Video Formats & Editing Styles

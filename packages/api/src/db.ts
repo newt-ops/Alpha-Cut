@@ -1,6 +1,6 @@
 import { MongoClient, Db, Collection } from "mongodb";
 import dotenv from "dotenv";
-import type { User, Inquiry, Project, Invoice, Expense, Proposal } from "@alpha-cut/types";
+import type { User, Inquiry, Project, Invoice, Expense, Proposal, TelegramBindToken } from "@alpha-cut/types";
 
 dotenv.config();
 
@@ -59,4 +59,9 @@ export function getInvoicesCollection(): Collection<Invoice> {
 export function getExpensesCollection(): Collection<Expense> {
   return getDB().collection<Expense>("expenses");
 }
+
+export function getTelegramBindTokensCollection(): Collection<TelegramBindToken> {
+  return getDB().collection<TelegramBindToken>("telegram_bind_tokens");
+}
+
 

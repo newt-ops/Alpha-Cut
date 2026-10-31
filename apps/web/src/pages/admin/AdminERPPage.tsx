@@ -33,6 +33,7 @@ import {
   Skeleton,
 } from "@alpha-cut/ui";
 import { useAuth } from "../../context/AuthContext.js";
+import { ThemeToggle } from "../../components/ThemeToggle.js";
 import type {
   Project,
   Inquiry,
@@ -253,17 +254,10 @@ export function AdminERPPage() {
   };
 
   useEffect(() => {
-    if (!authLoading) {
-      if (!user) {
-        navigate("/login");
-      } else if (user.role !== "super_admin") {
-        notify.error("Access Denied", "ERP Dashboard is reserved for Super Admins");
-        navigate("/portal");
-      } else {
-        fetchAllData();
-      }
+    if (user && user.role === "super_admin") {
+      fetchAllData();
     }
-  }, [user, authLoading, navigate]);
+  }, [user]);
 
   const handleSendProposal = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -474,6 +468,7 @@ export function AdminERPPage() {
           </nav>
 
           <div className="flex items-center gap-3">
+            <ThemeToggle />
             <span className="text-xs font-bold text-[#181818] dark:text-[#F5F3EC]">
               {user.name} (Founder)
             </span>

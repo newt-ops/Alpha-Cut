@@ -93,7 +93,6 @@ export function Footer() {
 
       <div className="max-w-7xl mx-auto px-6 mt-12 pt-6 border-t border-[#E5E5EA] dark:border-[#33302C] flex flex-col sm:flex-row items-center justify-between text-xs text-[#868686] dark:text-[#8C8A89] gap-4">
         <p>&copy; {new Date().getFullYear()} Alpha Cut Video Editing Agency. All rights reserved.</p>
-        <p>Built with precision &bull; Telegram: @alpha_cut_bot</p>
       </div>
     </footer>
   );

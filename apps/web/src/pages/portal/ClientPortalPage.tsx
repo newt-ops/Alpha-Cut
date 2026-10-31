@@ -10,6 +10,9 @@ import {
   PlusSignIcon,
   StarIcon,
   File01Icon,
+  TelegramIcon,
+  SecurityCheckIcon,
+  SentIcon,
 } from "hugeicons-react";
 import {
   Button,
@@ -32,16 +35,113 @@ import {
   Skeleton,
 } from "@alpha-cut/ui";
 import { useAuth } from "../../context/AuthContext.js";
+import { ThemeToggle } from "../../components/ThemeToggle.js";
 import { EDITING_STYLES, type Project, type VideoFormat, type EditingStyle, type PackageTier, type Proposal } from "@alpha-cut/types";
 
 export function ClientPortalPage() {
-  const { user, logout, isLoading: authLoading } = useAuth();
+  const { user, logout, refreshUser, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingProposals, setLoadingProposals] = useState(true);
+
+  // Telegram 1:1 Integration State
+  const [connectingTelegram, setConnectingTelegram] = useState(false);
+  const [awaitingTelegramLink, setAwaitingTelegramLink] = useState(false);
+  const [testingTelegram, setTestingTelegram] = useState(false);
+  const [unlinkingTelegram, setUnlinkingTelegram] = useState(false);
+
+  // Poll for link status when awaiting user to tap START in Telegram
+  useEffect(() => {
+    if (!awaitingTelegramLink) return;
+    const interval = setInterval(async () => {
+      try {
+        await refreshUser();
+      } catch {
+        // ignore
+      }
+    }, 2500);
+
+    const timeout = setTimeout(() => {
+      setAwaitingTelegramLink(false);
+    }, 120000); // Stop polling after 2 minutes
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [awaitingTelegramLink, refreshUser]);
+
+  // Turn off awaiting link once user.telegramId becomes available
+  useEffect(() => {
+    if (user?.telegramId && awaitingTelegramLink) {
+      setAwaitingTelegramLink(false);
+      notify.success("Telegram Connected!", "Your Telegram account is now paired 1:1 with Alpha Cut.");
+    }
+  }, [user?.telegramId, awaitingTelegramLink]);
+
+  const handleConnectTelegram = async () => {
+    try {
+      setConnectingTelegram(true);
+      const res = await fetch("/api/auth/telegram-bind-token", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to generate link");
+      }
+      const data = await res.json();
+      window.open(data.bindUrl, "_blank");
+      setAwaitingTelegramLink(true);
+      notify.info("Telegram Opened", "Tap START in Telegram to complete the 1:1 account connection.");
+    } catch (err: any) {
+      notify.error("Connection Failed", err.message);
+    } finally {
+      setConnectingTelegram(false);
+    }
+  };
+
+  const handleTestTelegram = async () => {
+    try {
+      setTestingTelegram(true);
+      const res = await fetch("/api/auth/telegram-test", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to deliver ping");
+      }
+      notify.success("Ping Dispatched", "Check your Telegram app for the verification alert.");
+    } catch (err: any) {
+      notify.error("Ping Failed", err.message);
+    } finally {
+      setTestingTelegram(false);
+    }
+  };
+
+  const handleUnlinkTelegram = async () => {
+    if (!confirm("Are you sure you want to disconnect your Telegram account? You will no longer receive fast 1-tap alerts on your phone.")) {
+      return;
+    }
+    try {
+      setUnlinkingTelegram(true);
+      const res = await fetch("/api/auth/telegram-unlink", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to unlink account");
+      }
+      await refreshUser();
+      notify.success("Account Unlinked", "Your Telegram account has been disconnected.");
+    } catch (err: any) {
+      notify.error("Unlink Failed", err.message);
+    } finally {
+      setUnlinkingTelegram(false);
+    }
+  };
 
   // Proposal Modals & Actions
   const [proposalRevisionModal, setProposalRevisionModal] = useState<Proposal | null>(null);
@@ -112,13 +212,11 @@ export function ClientPortalPage() {
   };
 
   useEffect(() => {
-    if (!authLoading && !user) {
-      navigate("/login");
-    } else if (user) {
+    if (user) {
       fetchProjects();
       fetchProposals();
     }
-  }, [user, authLoading, navigate]);
+  }, [user]);
 
   const handleAcceptFormalProposal = async (proposalId: string) => {
     try {
@@ -299,7 +397,8 @@ export function ClientPortalPage() {
             </span>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
             <div className="hidden sm:flex flex-col text-right">
               <span className="text-xs font-bold text-[#181818] dark:text-[#F5F3EC]">{user.name}</span>
               <span className="text-[11px] text-[#868686] dark:text-[#8C8A89]">{user.email}</span>
@@ -340,6 +439,102 @@ export function ClientPortalPage() {
             <PlusSignIcon className="h-4 w-4" />
             <span>Submit New Brief</span>
           </Button>
+        </div>
+
+        {/* TELEGRAM 1:1 FAST ACTIONS & ALERTS CARD */}
+        <div className="mb-10">
+          <Card className="border border-[#E5E5EA] dark:border-[#33302C] bg-white dark:bg-[#161412] overflow-hidden">
+            <div className="p-6 sm:p-7 flex flex-col md:flex-row md:items-center justify-between gap-6">
+              <div className="space-y-2">
+                <div className="flex items-start sm:items-center gap-3">
+                  <div className="h-10 w-10 rounded-2xl bg-[#229ED9]/10 text-[#229ED9] flex items-center justify-center shrink-0">
+                    <TelegramIcon className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-base font-bold text-[#181818] dark:text-[#F5F3EC]">
+                        Telegram Fast Actions & Mobile Alerts
+                      </h3>
+                      {user.telegramId ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#E8F5E9] text-[#2E7D32] dark:bg-[#1B5E20]/30 dark:text-[#81C784]">
+                          <span className="h-1.5 w-1.5 rounded-full bg-[#2E7D32] dark:bg-[#81C784] animate-pulse" />
+                          1:1 Connected
+                        </span>
+                      ) : awaitingTelegramLink ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#FFF8E1] text-[#F57F17] dark:bg-[#F57F17]/20 dark:text-[#FFD54F]">
+                          <span className="h-1.5 w-1.5 rounded-full bg-[#F57F17] animate-ping" />
+                          Waiting for /start in Telegram...
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-black/5 dark:bg-white/10 text-[#868686] dark:text-[#8C8A89]">
+                          Not Linked
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-[#868686] dark:text-[#8C8A89] mt-0.5">
+                      {user.telegramId
+                        ? `Linked 1:1 with ${user.telegramUsername ? `@${user.telegramUsername}` : `Chat ID ${user.telegramId}`}. Fast 1-tap approvals and real-time project alerts are enabled.`
+                        : "Connect your Telegram account to approve proposals and review deliverable cuts with 1 tap on your phone."}
+                    </p>
+                  </div>
+                </div>
+
+                {!user.telegramId && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 text-xs text-[#868686] dark:text-[#8C8A89]">
+                    <div className="flex items-center gap-1.5">
+                      <CheckmarkCircle02Icon className="h-3.5 w-3.5 text-brand-brown dark:text-brand-terracotta shrink-0" />
+                      <span>1-Tap proposal acceptance</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <CheckmarkCircle02Icon className="h-3.5 w-3.5 text-brand-brown dark:text-brand-terracotta shrink-0" />
+                      <span>Real-time cut review notices</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <SecurityCheckIcon className="h-3.5 w-3.5 text-brand-brown dark:text-brand-terracotta shrink-0" />
+                      <span>Strict 1:1 account security</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0">
+                {user.telegramId ? (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2 text-xs"
+                      onClick={handleTestTelegram}
+                      disabled={testingTelegram}
+                    >
+                      <SentIcon className="h-3.5 w-3.5" />
+                      <span>{testingTelegram ? "Dispatching..." : "Send Test Ping"}</span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20"
+                      onClick={handleUnlinkTelegram}
+                      disabled={unlinkingTelegram}
+                    >
+                      <span>{unlinkingTelegram ? "Unlinking..." : "Disconnect"}</span>
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="gap-2 text-xs"
+                    onClick={handleConnectTelegram}
+                    disabled={connectingTelegram}
+                  >
+                    <TelegramIcon className="h-3.5 w-3.5" />
+                    <span>{connectingTelegram ? "Connecting..." : awaitingTelegramLink ? "Re-open Telegram Link" : "Connect Telegram Account"}</span>
+                  </Button>
+                )}
+              </div>
+            </div>
+          </Card>
         </div>
 
         {/* PENDING PROPOSALS & AGREEMENTS SECTION */}

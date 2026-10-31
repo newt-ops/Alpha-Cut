@@ -14,6 +14,7 @@ import {
 } from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { sendTelegramMessage, notifyAdmins } from "../services/telegram.js";
+import { activateProposalProject } from "../services/proposalActivation.js";
 
 const router = Router();
 const CLIENT_URL = process.env.CLIENT_URL || "https://alpha-cut.com";
@@ -31,6 +32,39 @@ function isProposalParticipant(proposal: Proposal, user: any): boolean {
 
   if (propTg && (propTg === userTgId || propTg === userTgUsername)) return true;
   return false;
+}
+
+// Helper to resolve verified Telegram chat ID from linked user account
+async function resolveClientTelegramChatId(params: {
+  clientId?: string;
+  clientEmail?: string;
+  clientTelegram?: string;
+}): Promise<string | number | undefined> {
+  const users = getUsersCollection();
+
+  if (params.clientId && ObjectId.isValid(params.clientId)) {
+    const user = await users.findOne({ _id: new ObjectId(params.clientId) as any });
+    if (user?.telegramId) return user.telegramId;
+  }
+
+  if (params.clientEmail) {
+    const user = await users.findOne({ email: params.clientEmail.toLowerCase().trim() });
+    if (user?.telegramId) return user.telegramId;
+  }
+
+  if (params.clientTelegram) {
+    const clean = params.clientTelegram.replace(/^@/, "").trim().toLowerCase();
+    const user = await users.findOne({
+      $or: [
+        { telegramUsername: clean },
+        { telegramId: clean },
+      ],
+    });
+    if (user?.telegramId) return user.telegramId;
+    return params.clientTelegram;
+  }
+
+  return undefined;
 }
 
 // GET /api/proposals (List proposals)
@@ -177,19 +211,32 @@ router.post("/", requireAuth, requireRole(["super_admin"]), async (req: Request,
 
     // If sent immediately, notify client via Telegram if available
     if (status === "sent") {
-      const targetChatId = clientTelegram || clientId;
-      if (targetChatId) {
+      const resolvedChatId = await resolveClientTelegramChatId({
+        clientId,
+        clientEmail,
+        clientTelegram,
+      });
+
+      if (resolvedChatId) {
         sendTelegramMessage({
-          chatId: targetChatId,
-          text: `🎬 <b>New Alpha Cut Editing Proposal Ready!</b>\n\n<b>Scope:</b> ${initialVersion.title}\n<b>Investment:</b> ${initialVersion.price} ${initialVersion.currency}\n<b>Turnaround Due:</b> ${new Date(initialVersion.deadline).toLocaleDateString()}\n\nReview terms and accept to launch production:`,
+          chatId: resolvedChatId,
+          text:
+            `🎬 <b>New Alpha Cut Editing Proposal Ready!</b>\n\n` +
+            `<b>Proposal:</b> ${proposalNumber}\n` +
+            `<b>Scope:</b> ${initialVersion.title}\n` +
+            `<b>Investment:</b> ${initialVersion.price} ${initialVersion.currency}\n` +
+            `<b>Turnaround Due:</b> ${new Date(initialVersion.deadline).toLocaleDateString()}\n\n` +
+            `Tap below to accept and start production immediately, or request changes:`,
           parseMode: "HTML",
           replyMarkup: {
             inline_keyboard: [
               [
-                {
-                  text: "⚡ Review & Accept Proposal",
-                  web_app: { url: `${MINIAPP_URL}?proposal=${proposalId}` },
-                },
+                { text: "✅ Accept & Start Production", callback_data: `prop_accept:${proposalId}` },
+                { text: "✍️ Request Adjustments", callback_data: `prop_revise:${proposalId}` },
+              ],
+              [
+                { text: "⚡ Review in Mini App", web_app: { url: `${MINIAPP_URL}?proposal=${proposalId}` } },
+                { text: "🌐 Open Web Portal", url: `${CLIENT_URL}/portal` },
               ],
             ],
           },
@@ -227,20 +274,33 @@ router.patch("/:id/send", requireAuth, requireRole(["super_admin"]), async (req:
     );
 
     const activeVersion = proposal.versions[proposal.currentVersion - 1];
-    const targetChatId = proposal.clientTelegram || proposal.clientId;
+    const resolvedChatId = await resolveClientTelegramChatId({
+      clientId: proposal.clientId,
+      clientEmail: proposal.clientEmail,
+      clientTelegram: proposal.clientTelegram,
+    });
 
-    if (targetChatId) {
+    if (resolvedChatId) {
       sendTelegramMessage({
-        chatId: targetChatId,
-        text: `🎬 <b>Your Alpha Cut Editing Proposal has Arrived!</b>\n\n<b>Proposal:</b> ${proposal.proposalNumber}\n<b>Scope:</b> ${activeVersion.title}\n<b>Investment:</b> ${activeVersion.price} ${activeVersion.currency}\n<b>Included Revisions:</b> ${activeVersion.revisionsAllowed} rounds\n\nTap below to review the agreement and start production:`,
+        chatId: resolvedChatId,
+        text:
+          `🎬 <b>Your Alpha Cut Editing Proposal has Arrived!</b>\n\n` +
+          `<b>Proposal:</b> ${proposal.proposalNumber}\n` +
+          `<b>Scope:</b> ${activeVersion.title}\n` +
+          `<b>Investment:</b> ${activeVersion.price} ${activeVersion.currency}\n` +
+          `<b>Included Revisions:</b> ${activeVersion.revisionsAllowed} rounds\n` +
+          `<b>Target Due:</b> ${new Date(activeVersion.deadline).toLocaleDateString()}\n\n` +
+          `Tap below to accept and start production immediately, or request changes:`,
         parseMode: "HTML",
         replyMarkup: {
           inline_keyboard: [
             [
-              {
-                text: "⚡ Review & Accept Proposal",
-                web_app: { url: `${MINIAPP_URL}?proposal=${id}` },
-              },
+              { text: "✅ Accept & Start Production", callback_data: `prop_accept:${id}` },
+              { text: "✍️ Request Adjustments", callback_data: `prop_revise:${id}` },
+            ],
+            [
+              { text: "⚡ Review in Mini App", web_app: { url: `${MINIAPP_URL}?proposal=${id}` } },
+              { text: "🌐 Open Web Portal", url: `${CLIENT_URL}/portal` },
             ],
           ],
         },
@@ -301,19 +361,32 @@ router.post("/:id/version", requireAuth, requireRole(["super_admin"]), async (re
     );
 
     // Notify client of new version
-    const targetChatId = proposal.clientTelegram || proposal.clientId;
-    if (targetChatId) {
+    const resolvedChatId = await resolveClientTelegramChatId({
+      clientId: proposal.clientId,
+      clientEmail: proposal.clientEmail,
+      clientTelegram: proposal.clientTelegram,
+    });
+
+    if (resolvedChatId) {
       sendTelegramMessage({
-        chatId: targetChatId,
-        text: `📝 <b>Revised Proposal (Version ${nextVerNum}) Prepared</b>\n\nAmir & Aymen updated the terms for <b>${proposal.proposalNumber}</b>.\n<b>New Investment:</b> ${newVersion.price} ${newVersion.currency}\n\nTap below to review the updated proposal:`,
+        chatId: resolvedChatId,
+        text:
+          `📝 <b>Revised Proposal (Version ${nextVerNum}) Prepared</b>\n\n` +
+          `Amir & Aymen updated the terms for <b>${proposal.proposalNumber}</b>.\n` +
+          `<b>New Investment:</b> ${newVersion.price} ${newVersion.currency}\n` +
+          `<b>Included Revisions:</b> ${newVersion.revisionsAllowed} rounds\n` +
+          `<b>Target Due:</b> ${new Date(newVersion.deadline).toLocaleDateString()}\n\n` +
+          `Tap below to accept Version ${nextVerNum} or request further adjustments:`,
         parseMode: "HTML",
         replyMarkup: {
           inline_keyboard: [
             [
-              {
-                text: "⚡ Review Version " + nextVerNum,
-                web_app: { url: `${MINIAPP_URL}?proposal=${id}` },
-              },
+              { text: `✅ Accept Version ${nextVerNum}`, callback_data: `prop_accept:${id}` },
+              { text: "✍️ Request Adjustments", callback_data: `prop_revise:${id}` },
+            ],
+            [
+              { text: `⚡ Review in Mini App`, web_app: { url: `${MINIAPP_URL}?proposal=${id}` } },
+              { text: "🌐 Open Web Portal", url: `${CLIENT_URL}/portal` },
             ],
           ],
         },
@@ -350,84 +423,15 @@ router.post("/:id/accept", requireAuth, async (req: Request, res: Response): Pro
       return;
     }
 
-    const activeVersion = proposal.versions[proposal.currentVersion - 1];
-    const now = new Date();
-
-    // 1. ACTIVATE PROJECT (Choice A: Begins immediately in 'in_progress')
-    const projects = getProjectsCollection();
-    const projectResult = await projects.insertOne({
-      proposalId: id,
-      title: activeVersion.title,
-      clientId: proposal.clientId,
-      clientName: proposal.clientName,
-      clientEmail: proposal.clientEmail,
-      clientTelegram: proposal.clientTelegram,
-      format: activeVersion.format,
-      style: activeVersion.style,
-      tier: activeVersion.tier,
-      assignedEditor: activeVersion.assignedEditor || "unassigned",
-      stage: "in_progress",
-      price: activeVersion.price,
-      currency: activeVersion.currency,
-      revisionsAllowed: activeVersion.revisionsAllowed,
-      revisionsUsed: 0,
-      deadline: new Date(activeVersion.deadline),
-      footageUrl: activeVersion.footageUrl || "",
-      deliverableUrl: "",
-      notes: activeVersion.notes || "",
-      featuredOnWebsite: false,
-      proposalAcceptedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    const projectId = projectResult.insertedId.toString();
-
-    // 2. GENERATE INVOICE (Financial record tracked independently)
-    const invoices = getInvoicesCollection();
-    const invCount = await invoices.countDocuments();
-    const invoiceNumber = `INV-${now.getFullYear()}-${String(invCount + 1).padStart(3, "0")}`;
-    await invoices.insertOne({
-      invoiceNumber,
-      projectId,
-      projectTitle: activeVersion.title,
-      clientId: proposal.clientId,
-      clientName: proposal.clientName,
-      amount: activeVersion.price,
-      currency: activeVersion.currency,
-      status: "pending",
-      notes: `Generated from Proposal ${proposal.proposalNumber} (v${proposal.currentVersion})`,
-      createdAt: now,
-    });
-
-    // 3. UPDATE PROPOSAL TO ACCEPTED
-    await proposals.updateOne(
-      { _id: new ObjectId(id) as any },
-      {
-        $set: {
-          status: "accepted",
-          acceptedAt: now,
-          activatedProjectId: projectId,
-          updatedAt: now,
-        },
-      }
-    );
-
-    // 4. NOTIFY ADMINS (Amir & Aymen) ON TELEGRAM
-    notifyAdmins(
-      `🎉 *Proposal Accepted & Project Activated!*\n\n` +
-      `*Proposal:* ${proposal.proposalNumber} (v${proposal.currentVersion})\n` +
-      `*Project:* ${activeVersion.title}\n` +
-      `*Client:* ${proposal.clientName} (${proposal.clientEmail})\n` +
-      `*Amount:* ${activeVersion.price} ${activeVersion.currency}\n` +
-      `*Lead Editor:* ${(activeVersion.assignedEditor || "unassigned").toUpperCase()}\n` +
-      `*Due:* ${new Date(activeVersion.deadline).toLocaleDateString()}\n\n` +
-      `Production has officially begun.`
-    ).catch((err) => console.error("[Admin Alert Error]:", err));
+    const result = await activateProposalProject(id);
+    if (!result.success) {
+      res.status(500).json({ error: result.error || "Failed to activate proposal project" });
+      return;
+    }
 
     res.json({
       message: "Proposal accepted! Your project is now in active production.",
-      projectId,
+      projectId: result.projectId,
       activated: true,
     });
   } catch (error) {

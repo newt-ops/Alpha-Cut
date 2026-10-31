@@ -27,7 +27,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     const Comp = asChild ? Slot : "button";
 
     const baseStyles =
-      "inline-flex items-center justify-center font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-brown focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] select-none";
+      "inline-flex items-center justify-center gap-2 whitespace-nowrap shrink-0 font-semibold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-brown focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] select-none";
 
     const variants = {
       primary:
@@ -43,10 +43,10 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     };
 
     const sizes = {
-      sm: "h-9 px-4 text-xs rounded-xl",
-      md: "h-11 px-5 text-sm rounded-2xl",
-      lg: "h-13 px-7 text-base rounded-2xl",
-      icon: "h-10 w-10 rounded-xl",
+      sm: "h-10 px-4 text-xs rounded-xl",
+      md: "h-11 px-5 text-sm rounded-xl",
+      lg: "h-14 px-8 text-base rounded-2xl",
+      icon: "h-10 w-10 shrink-0 rounded-xl",
     };
 
     return (

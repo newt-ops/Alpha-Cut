@@ -1,11 +1,19 @@
 import { Router, Request, Response } from "express";
+import { ObjectId } from "mongodb";
 import {
   getProjectsCollection,
   getInquiriesCollection,
   getProposalsCollection,
   getInvoicesCollection,
+  getUsersCollection,
+  getTelegramBindTokensCollection,
 } from "../db.js";
-import { sendTelegramMessage, answerCallbackQuery } from "../services/telegram.js";
+import {
+  sendTelegramMessage,
+  answerCallbackQuery,
+  editTelegramMessageText,
+} from "../services/telegram.js";
+import { activateProposalProject } from "../services/proposalActivation.js";
 import { EDITING_STYLES } from "@alpha-cut/types";
 
 const router = Router();
@@ -27,6 +35,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
     const { message, callback_query } = req.body;
 
     let chatId: number | string | undefined;
+    let messageId: number | undefined;
     let text = "";
     let callbackId: string | undefined;
     let senderName = "there";
@@ -34,6 +43,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
 
     if (callback_query) {
       chatId = callback_query.message?.chat?.id;
+      messageId = callback_query.message?.message_id;
       text = callback_query.data || "";
       callbackId = callback_query.id;
       senderName = callback_query.from?.first_name || "there";
@@ -43,6 +53,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       }
     } else if (message && message.text) {
       chatId = message.chat.id;
+      messageId = message.message_id;
       text = message.text.trim();
       senderName = message.from?.first_name || "there";
       senderUsername = (message.from?.username || "").toLowerCase();
@@ -210,7 +221,101 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       const parts = text.split(" ");
       const param = parts[1];
 
-      if (param && param.startsWith("proposal_")) {
+      if (param && param.startsWith("bind_")) {
+        const bindToken = param.replace("bind_", "").trim();
+        const bindTokens = getTelegramBindTokensCollection();
+        const users = getUsersCollection();
+
+        const tokenDoc = await bindTokens.findOne({ token: bindToken });
+        if (!tokenDoc || new Date(tokenDoc.expiresAt).getTime() < Date.now()) {
+          await sendTelegramMessage({
+            chatId,
+            text:
+              `⚠️ <b>Invalid or Expired Link</b>\n\n` +
+              `This Telegram connection link is no longer valid. Please return to your <b>Alpha Cut Client Portal</b> and generate a new connection link.`,
+            parseMode: "HTML",
+            replyMarkup: {
+              inline_keyboard: [[{ text: "🌐 Open Client Portal", url: `${CLIENT_URL}/portal` }]],
+            },
+          });
+          res.sendStatus(200);
+          return;
+        }
+
+        // ==========================================
+        // STRICT 1:1 ENFORCEMENT
+        // Check if this Telegram account is already linked to ANOTHER Web user
+        // ==========================================
+        const existingTelegramOwner = await users.findOne({
+          telegramId: String(chatId),
+          _id: { $ne: new ObjectId(tokenDoc.userId) as any },
+        });
+
+        if (existingTelegramOwner) {
+          await sendTelegramMessage({
+            chatId,
+            text:
+              `⚠️ <b>Account Already Linked (1:1 Policy)</b>\n\n` +
+              `This Telegram account is already linked to another Alpha Cut account (<code>${existingTelegramOwner.email}</code>).\n\n` +
+              `To pair this Telegram account with <b>${tokenDoc.clientEmail}</b>, please disconnect it from your existing account first in the Client Portal settings.`,
+            parseMode: "HTML",
+            replyMarkup: {
+              inline_keyboard: [[{ text: "🌐 Open Client Portal", url: `${CLIENT_URL}/portal` }]],
+            },
+          });
+          res.sendStatus(200);
+          return;
+        }
+
+        const now = new Date();
+        await users.updateOne(
+          { _id: new ObjectId(tokenDoc.userId) as any },
+          {
+            $set: {
+              telegramId: String(chatId),
+              telegramUsername: senderUsername || "",
+              telegramLinkedAt: now,
+              updatedAt: now,
+            },
+          }
+        );
+
+        // Delete used token
+        await bindTokens.deleteOne({ _id: tokenDoc._id });
+
+        // Update proposals matching clientEmail or userId with this Telegram handle
+        const proposals = getProposalsCollection();
+        await proposals.updateMany(
+          {
+            $or: [
+              { clientId: tokenDoc.userId },
+              { clientEmail: tokenDoc.clientEmail.toLowerCase() },
+            ],
+          },
+          { $set: { clientTelegram: senderUsername || String(chatId) } }
+        );
+
+        await sendTelegramMessage({
+          chatId,
+          text:
+            `✅ <b>Telegram Account Successfully Linked!</b>\n\n` +
+            `Your Telegram is now paired 1:1 with your Alpha Cut account: <b>${tokenDoc.clientEmail}</b>.\n\n` +
+            `• <b>Fast Actions:</b> You can now accept or review video proposals directly with 1 tap.\n` +
+            `• <b>Real-time Alerts:</b> Receive instant notifications when your draft cuts are ready.\n` +
+            `• <b>Security:</b> Verified 1:1 account connection.`,
+          parseMode: "HTML",
+          replyMarkup: {
+            inline_keyboard: [
+              [
+                { text: "🚀 Open Client Workspace", web_app: { url: MINIAPP_URL } },
+                { text: "🌐 Open Web Portal", url: `${CLIENT_URL}/portal` },
+              ],
+            ],
+          },
+        });
+        res.sendStatus(200);
+        return;
+      } else if (param && param.startsWith("proposal_")) {
         const proposalId = param.replace("proposal_", "");
         await sendTelegramMessage({
           chatId,
@@ -425,6 +530,144 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
           ],
         },
       });
+    }
+
+    // FAST ACTION: PROPOSAL 1-TAP ACCEPTANCE
+    else if (text.startsWith("prop_accept:")) {
+      const proposalId = text.replace("prop_accept:", "").trim();
+      const proposals = getProposalsCollection();
+      const users = getUsersCollection();
+
+      if (!ObjectId.isValid(proposalId)) {
+        await sendTelegramMessage({
+          chatId,
+          text: `⚠️ <b>Invalid Proposal Link</b>`,
+          parseMode: "HTML",
+        });
+        res.sendStatus(200);
+        return;
+      }
+
+      const proposal = await proposals.findOne({ _id: new ObjectId(proposalId) as any });
+      if (!proposal) {
+        await sendTelegramMessage({
+          chatId,
+          text: `⚠️ <b>Proposal Not Found</b>\n\nThis proposal no longer exists or has expired.`,
+          parseMode: "HTML",
+        });
+        res.sendStatus(200);
+        return;
+      }
+
+      // Authorization check: Verify sender owns or participates in this proposal
+      const linkedUser = await users.findOne({ telegramId: String(chatId) });
+      const senderHandle = senderUsername ? senderUsername.replace(/^@/, "").toLowerCase() : "";
+      const proposalTg = proposal.clientTelegram ? proposal.clientTelegram.replace(/^@/, "").toLowerCase() : "";
+
+      const isAuthorized =
+        isSuperAdmin ||
+        (linkedUser && proposal.clientId && String(proposal.clientId) === String(linkedUser._id)) ||
+        (linkedUser && proposal.clientEmail && proposal.clientEmail.toLowerCase() === linkedUser.email.toLowerCase()) ||
+        (proposalTg && (proposalTg === senderHandle || proposalTg === String(chatId)));
+
+      if (!isAuthorized) {
+        await sendTelegramMessage({
+          chatId,
+          text: `🚫 <b>Unauthorized Action</b>\n\nYour Telegram account is not linked as the client for this proposal. Please sign in to the Alpha Cut Web Portal to connect your account.`,
+          parseMode: "HTML",
+          replyMarkup: {
+            inline_keyboard: [[{ text: "🌐 Open Web Portal", url: `${CLIENT_URL}/portal` }]],
+          },
+        });
+        res.sendStatus(200);
+        return;
+      }
+
+      if (proposal.status === "accepted") {
+        await sendTelegramMessage({
+          chatId,
+          text: `ℹ️ <b>Already Accepted</b>\n\nProposal <b>${proposal.proposalNumber}</b> is already active in production.`,
+          parseMode: "HTML",
+        });
+        res.sendStatus(200);
+        return;
+      }
+
+      // Execute Choice A activation
+      const result = await activateProposalProject(proposalId);
+      if (!result.success) {
+        await sendTelegramMessage({
+          chatId,
+          text: `⚠️ <b>Activation Error:</b> ${result.error}`,
+          parseMode: "HTML",
+        });
+        res.sendStatus(200);
+        return;
+      }
+
+      // In-place update of original Telegram message if messageId is known
+      const confirmationText =
+        `✅ <b>Proposal ${result.proposalNumber} Accepted!</b>\n\n` +
+        `🎬 <b>Project:</b> ${result.title}\n` +
+        `💼 <b>Lead Editor:</b> ${(result.editor || "Unassigned").toUpperCase()}\n` +
+        `💰 <b>Investment:</b> ${result.price} ${result.currency}\n` +
+        `📅 <b>Target Delivery:</b> ${result.deadline}\n\n` +
+        `🚀 <b>Production Activated (Choice A)</b>\n` +
+        `Your cut has entered production. Track milestones on your Client Portal.`;
+
+      const confirmationMarkup = {
+        inline_keyboard: [
+          [
+            { text: "🚀 Open Client Workspace", web_app: { url: MINIAPP_URL } },
+            { text: "🌐 Open Web Portal", url: `${CLIENT_URL}/portal` },
+          ],
+        ],
+      };
+
+      if (messageId) {
+        await editTelegramMessageText({
+          chatId,
+          messageId,
+          text: confirmationText,
+          parseMode: "HTML",
+          replyMarkup: confirmationMarkup,
+        });
+      } else {
+        await sendTelegramMessage({
+          chatId,
+          text: confirmationText,
+          parseMode: "HTML",
+          replyMarkup: confirmationMarkup,
+        });
+      }
+
+      res.sendStatus(200);
+      return;
+    }
+
+    // FAST ACTION: PROPOSAL REVISION REQUEST
+    else if (text.startsWith("prop_revise:")) {
+      const proposalId = text.replace("prop_revise:", "").trim();
+      await sendTelegramMessage({
+        chatId,
+        text:
+          `✍️ <b>Request Adjustments for Proposal</b>\n\n` +
+          `To negotiate scope, investment, or delivery schedule, tap below to open the revision dialog or chat directly with Amir:`,
+        parseMode: "HTML",
+        replyMarkup: {
+          inline_keyboard: [
+            [
+              {
+                text: "📝 Submit Adjustments",
+                web_app: { url: `${MINIAPP_URL}?proposal=${proposalId}&tab=revision` },
+              },
+            ],
+            [{ text: "💬 Chat with Amir", url: "https://t.me/Amir_Alpha_Cut" }],
+          ],
+        },
+      });
+      res.sendStatus(200);
+      return;
     }
 
     // Fallback for free-form user messages
