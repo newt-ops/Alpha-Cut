@@ -13,9 +13,9 @@ services:
       - key: PORT
         value: 5000
       - key: CLIENT_URL
-        value: https://alpha-cut-nine.vercel.app
+        value: https://alpha-cut.com
       - key: SERVER_URL
-        value: https://alpha-cut.onrender.com
+        value: https://api.alpha-cut.com
       - key: MONGODB_URI
         sync: false
       - key: JWT_ACCESS_SECRET

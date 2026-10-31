@@ -18,12 +18,15 @@ const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
 
 const allowedOrigins = [
   CLIENT_URL,
+  "https://alpha-cut.com",
+  "https://www.alpha-cut.com",
+  "https://api.alpha-cut.com",
+  "https://alpha-cut-nine.vercel.app",
   "http://localhost:5173",
   "http://localhost:5174",
   "http://127.0.0.1:5173",
   "http://127.0.0.1:5174",
   "https://web.telegram.org",
-  "https://alpha-cut-nine.vercel.app",
 ].filter(Boolean);
 
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));

@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/:match*",
-      "destination": "https://alpha-cut.onrender.com/api/:match*"
+      "destination": "https://api.alpha-cut.com/api/:match*"
     },
     {
       "source": "/(.*)",
