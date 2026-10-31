@@ -132,11 +132,76 @@ export const InquirySchema = z.object({
 export type Inquiry = z.infer<typeof InquirySchema>;
 
 // ==========================================
+// Proposals (Formal Agreements & Versioning)
+// ==========================================
+
+export const ProposalStatusSchema = z.enum([
+  "draft",
+  "sent",
+  "viewed",
+  "revision_requested",
+  "accepted",
+  "rejected",
+  "expired",
+]);
+export type ProposalStatus = z.infer<typeof ProposalStatusSchema>;
+
+export const ProposalCommentSchema = z.object({
+  id: z.string(),
+  senderName: z.string(),
+  senderRole: z.enum(["super_admin", "client"]),
+  message: z.string().min(1),
+  timestamp: z.string().or(z.date()),
+});
+export type ProposalComment = z.infer<typeof ProposalCommentSchema>;
+
+export const ProposalVersionSchema = z.object({
+  version: z.number().int().positive(),
+  title: z.string().min(3),
+  format: VideoFormatSchema,
+  style: EditingStyleSchema,
+  tier: PackageTierSchema.default("professional"),
+  price: z.number().nonnegative(),
+  currency: z.enum(["USD", "ETB"]).default("USD"),
+  revisionsAllowed: z.number().int().nonnegative().default(2),
+  deadline: z.string().or(z.date()),
+  deliverablesSummary: z.array(z.string()).default([]),
+  footageUrl: z.string().optional().or(z.literal("")),
+  notes: z.string().optional(),
+  assignedEditor: z.enum(["amir", "aymen", "unassigned"]).default("unassigned"),
+  createdAt: z.string().or(z.date()),
+});
+export type ProposalVersion = z.infer<typeof ProposalVersionSchema>;
+
+export const ProposalSchema = z.object({
+  _id: z.string().optional(),
+  proposalNumber: z.string(),
+  clientId: z.string(),
+  clientName: z.string(),
+  clientEmail: z.string().email(),
+  clientTelegram: z.string().optional(),
+  status: ProposalStatusSchema.default("draft"),
+  currentVersion: z.number().int().positive().default(1),
+  versions: z.array(ProposalVersionSchema).min(1),
+  discussion: z.array(ProposalCommentSchema).default([]),
+  activatedProjectId: z.string().optional(),
+  validUntil: z.string().or(z.date()).optional(),
+  viewedAt: z.string().or(z.date()).optional(),
+  acceptedAt: z.string().or(z.date()).optional(),
+  rejectedAt: z.string().or(z.date()).optional(),
+  revisionFeedback: z.string().optional(),
+  createdAt: z.string().or(z.date()).optional(),
+  updatedAt: z.string().or(z.date()).optional(),
+});
+export type Proposal = z.infer<typeof ProposalSchema>;
+
+// ==========================================
 // Project Specification
 // ==========================================
 
 export const ProjectSchema = z.object({
   _id: z.string().optional(),
+  proposalId: z.string().optional(),
   title: z.string().min(3, "Project title required"),
   clientId: z.string(),
   clientName: z.string(),

@@ -16,6 +16,7 @@ import {
 import {
   EDITING_STYLES,
   type Project,
+  type Proposal,
   type VideoFormat,
   type EditingStyle,
   type PackageTier,
@@ -26,11 +27,17 @@ type MiniAppTab = "projects" | "new_brief" | "styles" | "team";
 export default function App() {
   const [activeTab, setActiveTab] = useState<MiniAppTab>("projects");
   const [projects, setProjects] = useState<Project[]>([]);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Selected project for deep inspection / actions
+  // Selected project or proposal for deep inspection / actions
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [selectedProposal, setSelectedProposal] = useState<Proposal | null>(null);
+
+  // Proposal Revision
+  const [showProposalRevisionModal, setShowProposalRevisionModal] = useState(false);
+  const [proposalRevisionNotes, setProposalRevisionNotes] = useState("");
 
   // Forms & Modals
   const [newBrief, setNewBrief] = useState({
@@ -78,40 +85,52 @@ export default function App() {
     return fetch(url, { ...options, headers });
   }, []);
 
-  // Fetch Projects belonging to this Telegram client
+  // Fetch Projects and Proposals belonging to this Telegram client
   const fetchProjects = useCallback(async () => {
     try {
       setLoading(true);
       setErrorMsg(null);
-      const res = await apiFetch("/api/projects");
+      const [projRes, propRes] = await Promise.all([
+        apiFetch("/api/projects"),
+        apiFetch("/api/proposals"),
+      ]);
 
-      if (res.ok) {
-        const data = await res.json();
-        const list: Project[] = data.projects || [];
-        setProjects(list);
+      let projList: Project[] = [];
+      let propList: Proposal[] = [];
 
-        // Check URL params for deep-linking
-        const params = new URLSearchParams(window.location.search);
-        const proposalId = params.get("proposal");
-        const projectId = params.get("project");
-        const tabParam = params.get("tab") as MiniAppTab | null;
+      if (projRes.ok) {
+        const data = await projRes.json();
+        projList = data.projects || [];
+        setProjects(projList);
+      }
 
-        if (proposalId) {
-          const match = list.find((p) => p._id === proposalId);
-          if (match) setSelectedProject(match);
-        } else if (projectId) {
-          const match = list.find((p) => p._id === projectId);
-          if (match) setSelectedProject(match);
+      if (propRes.ok) {
+        const data = await propRes.json();
+        propList = data.proposals || [];
+        setProposals(propList);
+      }
+
+      // Check URL params for deep-linking
+      const params = new URLSearchParams(window.location.search);
+      const proposalId = params.get("proposal");
+      const projectId = params.get("project");
+      const tabParam = params.get("tab") as MiniAppTab | null;
+
+      if (proposalId) {
+        const matchProp = propList.find((p) => p._id === proposalId);
+        if (matchProp) {
+          setSelectedProposal(matchProp);
+          if (matchProp.status === "sent" && matchProp._id) {
+            apiFetch(`/api/proposals/${matchProp._id}`).catch(() => {});
+          }
         }
+      } else if (projectId) {
+        const matchProj = projList.find((p) => p._id === projectId);
+        if (matchProj) setSelectedProject(matchProj);
+      }
 
-        if (tabParam && ["projects", "new_brief", "styles", "team"].includes(tabParam)) {
-          setActiveTab(tabParam);
-        }
-      } else if (res.status === 401) {
-        // Outside Telegram environment or invalid initData
-        setErrorMsg("Please open this app inside Telegram via @alpha_cut_bot to access your projects.");
-      } else {
-        setErrorMsg("Unable to retrieve projects. Please try again shortly.");
+      if (tabParam && ["projects", "new_brief", "styles", "team"].includes(tabParam)) {
+        setActiveTab(tabParam);
       }
     } catch (err) {
       console.error("[MiniApp fetch error]:", err);
@@ -129,10 +148,14 @@ export default function App() {
       tg.expand();
 
       // Configure BackButton
-      if (selectedProject || showRevisionModal || showReviewModal) {
+      if (selectedProject || selectedProposal || showRevisionModal || showReviewModal || showProposalRevisionModal) {
         tg.BackButton.show();
         const handleBack = () => {
-          if (showRevisionModal) {
+          if (showProposalRevisionModal) {
+            setShowProposalRevisionModal(false);
+          } else if (selectedProposal) {
+            setSelectedProposal(null);
+          } else if (showRevisionModal) {
             setShowRevisionModal(false);
           } else if (showReviewModal) {
             setShowReviewModal(false);
@@ -148,12 +171,64 @@ export default function App() {
         tg.BackButton.hide();
       }
     }
-  }, [selectedProject, showRevisionModal, showReviewModal]);
+  }, [selectedProject, selectedProposal, showRevisionModal, showReviewModal, showProposalRevisionModal]);
 
   // Initial load
   useEffect(() => {
     fetchProjects();
   }, [fetchProjects]);
+
+  // Accept Formal Proposal (Choice A Project Activation)
+  const handleAcceptFormalProposal = async (proposalId: string) => {
+    haptic("heavy");
+    setActionInProgress(true);
+    try {
+      const res = await apiFetch(`/api/proposals/${proposalId}/accept`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        hapticSuccess();
+        await fetchProjects();
+        setSelectedProposal(null);
+        setActiveTab("projects");
+      } else {
+        hapticError();
+      }
+    } catch (err) {
+      console.error(err);
+      hapticError();
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  // Submit Formal Proposal Revision Request
+  const handleRequestFormalProposalRevision = async () => {
+    if (!selectedProposal || !proposalRevisionNotes.trim()) return;
+    haptic("medium");
+    setActionInProgress(true);
+    try {
+      const res = await apiFetch(`/api/proposals/${selectedProposal._id}/request-revision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: proposalRevisionNotes }),
+      });
+      if (res.ok) {
+        hapticSuccess();
+        setShowProposalRevisionModal(false);
+        setProposalRevisionNotes("");
+        await fetchProjects();
+        setSelectedProposal(null);
+      } else {
+        hapticError();
+      }
+    } catch (err) {
+      console.error(err);
+      hapticError();
+    } finally {
+      setActionInProgress(false);
+    }
+  };
 
   // Accept Scope Proposal
   const handleAcceptProposal = async (projectId: string) => {
@@ -359,8 +434,141 @@ export default function App() {
           </div>
         )}
 
-        {/* 1. PROJECT DETAIL VIEW */}
-        {selectedProject ? (
+        {/* 1. PROPOSAL DETAIL VIEW */}
+        {selectedProposal ? (
+          <div className="space-y-4">
+            {(() => {
+              const v =
+                selectedProposal.versions.find((ver) => ver.version === selectedProposal.currentVersion) ||
+                selectedProposal.versions[0];
+              const isActionable =
+                selectedProposal.status === "sent" || selectedProposal.status === "viewed";
+
+              return (
+                <div className="p-4 rounded-2xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-tg-bg text-tg-button">
+                        {selectedProposal.proposalNumber}
+                      </span>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10">
+                        v{selectedProposal.currentVersion}
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-tg-button/10 text-tg-button">
+                      {selectedProposal.status.replace("_", " ")}
+                    </span>
+                  </div>
+
+                  <div>
+                    <h2 className="text-base font-bold text-tg-text leading-snug">
+                      {v?.title || selectedProposal.proposalNumber}
+                    </h2>
+                    <p className="text-xs text-tg-hint mt-0.5">
+                      {v?.format === "short_form"
+                        ? "Short-Form (Reels / TikTok)"
+                        : "Long-Form (YouTube / Course)"}{" "}
+                      &bull; {v?.style ? (EDITING_STYLES[v.style]?.label || v.style) : ""}
+                    </p>
+                  </div>
+
+                  {/* Pricing Card */}
+                  <div className="p-4 rounded-xl bg-tg-bg border border-black/10 dark:border-white/10 space-y-3">
+                    <div className="flex justify-between items-baseline">
+                      <span className="text-xs font-bold text-tg-hint uppercase tracking-wider">
+                        Agreed Investment
+                      </span>
+                      <span className="text-xl font-black text-tg-text">
+                        {v?.price.toLocaleString()} {v?.currency}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs border-t border-black/5 dark:border-white/5 pt-2 text-tg-hint">
+                      <div>
+                        <span className="block text-[10px]">Delivery Target</span>
+                        <span className="font-bold text-tg-text">
+                          {v?.deadline ? new Date(v.deadline).toLocaleDateString() : "TBD"}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px]">Revisions</span>
+                        <span className="font-bold text-tg-text">{v?.revisionsAllowed} rounds</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Scope Notes */}
+                  {v?.notes && (
+                    <div className="p-3 rounded-xl bg-tg-bg border border-black/10 dark:border-white/10 text-xs space-y-1">
+                      <span className="font-bold text-tg-text block text-[11px]">
+                        Scope Inclusions:
+                      </span>
+                      <p className="text-tg-hint leading-relaxed">{v.notes}</p>
+                    </div>
+                  )}
+
+                  {/* Revision feedback alert */}
+                  {selectedProposal.status === "revision_requested" && (
+                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs space-y-1">
+                      <span className="font-bold text-amber-700 dark:text-amber-400 block">
+                        Revision Requested:
+                      </span>
+                      <p className="text-tg-hint italic">"{selectedProposal.revisionFeedback}"</p>
+                      <p className="text-[10px] text-amber-700 dark:text-amber-400">
+                        Amir & Aymen are preparing updated terms (v{selectedProposal.currentVersion + 1}).
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  {isActionable && (
+                    <div className="space-y-2 pt-2">
+                      <button
+                        disabled={actionInProgress}
+                        className="w-full py-3 px-4 rounded-xl font-bold bg-tg-button text-tg-buttonText text-xs shadow-sm active:opacity-90 transition-opacity flex items-center justify-center gap-1.5 disabled:opacity-50"
+                        onClick={() =>
+                          selectedProposal._id && handleAcceptFormalProposal(selectedProposal._id)
+                        }
+                      >
+                        <CheckmarkCircle02Icon className="h-4 w-4" />
+                        <span>Accept Proposal & Start Production</span>
+                      </button>
+
+                      <button
+                        disabled={actionInProgress}
+                        className="w-full py-2.5 px-4 rounded-xl font-bold bg-tg-bg text-tg-hint border border-black/10 dark:border-white/10 text-xs active:opacity-90 transition-opacity"
+                        onClick={() => {
+                          haptic("light");
+                          setShowProposalRevisionModal(true);
+                        }}
+                      >
+                        Request Changes / Negotiate
+                      </button>
+                    </div>
+                  )}
+
+                  {selectedProposal.status === "accepted" && (
+                    <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs flex items-center justify-between text-emerald-700 dark:text-emerald-400 font-semibold">
+                      <span>Accepted & In Production</span>
+                      <CheckmarkCircle02Icon className="h-4 w-4" />
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <button
+              className="w-full py-2.5 rounded-xl text-xs font-semibold text-tg-hint bg-tg-secondaryBg border border-black/10 dark:border-white/10 flex items-center justify-center gap-1.5"
+              onClick={() => {
+                haptic("light");
+                setSelectedProposal(null);
+              }}
+            >
+              <ArrowLeft01Icon className="h-3.5 w-3.5" />
+              <span>Back to Pipeline</span>
+            </button>
+          </div>
+        ) : selectedProject ? (
           <div className="space-y-4">
             <div className="p-4 rounded-2xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 space-y-3.5">
               <div className="flex items-center justify-between">
@@ -545,27 +753,65 @@ export default function App() {
             {loading ? (
               <div className="p-12 text-center text-xs text-tg-hint space-y-2">
                 <Clock01Icon className="h-6 w-6 text-tg-button animate-spin mx-auto" />
-                <p>Loading projects...</p>
-              </div>
-            ) : projects.length === 0 ? (
-              <div className="p-8 text-center bg-tg-secondaryBg rounded-2xl border border-black/10 dark:border-white/10 space-y-3">
-                <SparklesIcon className="h-8 w-8 text-tg-button mx-auto" />
-                <h3 className="text-sm font-bold text-tg-text">No active cuts in queue</h3>
-                <p className="text-xs text-tg-hint max-w-xs mx-auto">
-                  Submit raw footage with your creative brief to receive a customized scope quote within hours.
-                </p>
-                <button
-                  className="py-2.5 px-4 rounded-xl font-bold bg-tg-button text-tg-buttonText text-xs shadow-sm active:opacity-90"
-                  onClick={() => {
-                    haptic("light");
-                    setActiveTab("new_brief");
-                  }}
-                >
-                  Start First Project
-                </button>
+                <p>Loading projects & proposals...</p>
               </div>
             ) : (
-              projects.map((proj) => (
+              <>
+                {/* Actionable Proposals */}
+                {proposals
+                  .filter((p) => p.status === "sent" || p.status === "viewed" || p.status === "revision_requested")
+                  .map((p) => {
+                    const v = p.versions.find((ver) => ver.version === p.currentVersion) || p.versions[0];
+                    return (
+                      <div
+                        key={p._id}
+                        className="p-3.5 rounded-xl bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/30 active:scale-[0.99] transition-transform cursor-pointer space-y-1.5"
+                        onClick={() => {
+                          haptic("light");
+                          setSelectedProposal(p);
+                          if (p.status === "sent" && p._id) {
+                            apiFetch(`/api/proposals/${p._id}`).catch(() => {});
+                          }
+                        }}
+                      >
+                        <div className="flex justify-between items-center text-[10px] font-bold text-amber-700 dark:text-amber-400">
+                          <span>PROPOSAL READY FOR REVIEW &bull; v{p.currentVersion}</span>
+                          <span className="uppercase px-1.5 py-0.5 rounded bg-amber-500/20">
+                            {p.status.replace("_", " ")}
+                          </span>
+                        </div>
+                        <h4 className="text-sm font-bold text-tg-text">{v?.title || p.proposalNumber}</h4>
+                        <div className="flex justify-between items-center text-[11px] text-tg-hint pt-1 border-t border-amber-500/20">
+                          <span className="font-semibold text-tg-text">
+                            {v?.price} {v?.currency}
+                          </span>
+                          <span className="flex items-center gap-1 text-amber-700 dark:text-amber-400 font-bold">
+                            Review & Accept <ArrowRight01Icon className="h-3 w-3" />
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                {projects.length === 0 && proposals.length === 0 ? (
+                  <div className="p-8 text-center bg-tg-secondaryBg rounded-2xl border border-black/10 dark:border-white/10 space-y-3">
+                    <SparklesIcon className="h-8 w-8 text-tg-button mx-auto" />
+                    <h3 className="text-sm font-bold text-tg-text">No active cuts in queue</h3>
+                    <p className="text-xs text-tg-hint max-w-xs mx-auto">
+                      Submit raw footage with your creative brief to receive a customized scope quote within hours.
+                    </p>
+                    <button
+                      className="py-2.5 px-4 rounded-xl font-bold bg-tg-button text-tg-buttonText text-xs shadow-sm active:opacity-90"
+                      onClick={() => {
+                        haptic("light");
+                        setActiveTab("new_brief");
+                      }}
+                    >
+                      Start First Project
+                    </button>
+                  </div>
+                ) : (
+                  projects.map((proj) => (
                 <div
                   key={proj._id}
                   className="p-3.5 rounded-xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 active:scale-[0.99] transition-transform cursor-pointer space-y-2"
@@ -600,6 +846,8 @@ export default function App() {
                   </div>
                 </div>
               ))
+            )}
+            </>
             )}
           </div>
         ) : activeTab === "new_brief" ? (
@@ -966,6 +1214,48 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* Proposal Revision Request Modal */}
+        {showProposalRevisionModal && selectedProposal && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+            <div className="bg-tg-bg rounded-2xl p-5 w-full max-w-sm space-y-3.5 border border-black/10 dark:border-white/10">
+              <div className="flex justify-between items-center">
+                <h3 className="font-bold text-sm text-tg-text">Request Changes</h3>
+                <button
+                  onClick={() => setShowProposalRevisionModal(false)}
+                  className="text-tg-hint hover:text-tg-text"
+                >
+                  <Cancel01Icon className="h-4 w-4" />
+                </button>
+              </div>
+              <p className="text-xs text-tg-hint">
+                For {selectedProposal.proposalNumber} (v{selectedProposal.currentVersion}). Explain what terms to adjust.
+              </p>
+              <textarea
+                rows={4}
+                placeholder="e.g. Can we adjust price to 4,500 ETB, extend delivery by 2 days, or include 1 more revision?"
+                className="w-full p-3 rounded-xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 text-tg-text text-xs focus:outline-none"
+                value={proposalRevisionNotes}
+                onChange={(e) => setProposalRevisionNotes(e.target.value)}
+              />
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  className="py-2.5 rounded-xl text-xs font-semibold bg-tg-secondaryBg text-tg-text"
+                  onClick={() => setShowProposalRevisionModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={actionInProgress || !proposalRevisionNotes.trim()}
+                  className="py-2.5 rounded-xl text-xs font-bold bg-tg-button text-tg-buttonText disabled:opacity-50"
+                  onClick={handleRequestFormalProposalRevision}
+                >
+                  Send Request
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
 
       {/* Bottom Centum Navigation Bar */}
@@ -973,13 +1263,14 @@ export default function App() {
         <div className="max-w-lg mx-auto grid grid-cols-4 py-2 px-1">
           <button
             className={`flex flex-col items-center gap-1 py-1 transition-colors ${
-              activeTab === "projects" && !selectedProject
+              activeTab === "projects" && !selectedProject && !selectedProposal
                 ? "text-tg-button font-bold"
                 : "text-tg-hint font-medium"
             }`}
             onClick={() => {
               haptic("light");
               setSelectedProject(null);
+              setSelectedProposal(null);
               setActiveTab("projects");
             }}
           >
@@ -996,6 +1287,7 @@ export default function App() {
             onClick={() => {
               haptic("light");
               setSelectedProject(null);
+              setSelectedProposal(null);
               setActiveTab("new_brief");
             }}
           >
@@ -1012,6 +1304,7 @@ export default function App() {
             onClick={() => {
               haptic("light");
               setSelectedProject(null);
+              setSelectedProposal(null);
               setActiveTab("styles");
             }}
           >
@@ -1028,6 +1321,7 @@ export default function App() {
             onClick={() => {
               haptic("light");
               setSelectedProject(null);
+              setSelectedProposal(null);
               setActiveTab("team");
             }}
           >

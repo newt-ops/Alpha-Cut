@@ -9,6 +9,7 @@ import inquiriesRouter from "./routes/inquiries.js";
 import projectsRouter from "./routes/projects.js";
 import financesRouter from "./routes/finances.js";
 import telegramRouter from "./routes/telegram.js";
+import proposalsRouter from "./routes/proposals.js";
 
 dotenv.config();
 
@@ -50,6 +51,7 @@ app.use(express.json());
 app.use("/api/auth", authRouter);
 app.use("/api/inquiries", inquiriesRouter);
 app.use("/api/projects", projectsRouter);
+app.use("/api/proposals", proposalsRouter);
 app.use("/api/finances", financesRouter);
 app.use("/api/telegram", telegramRouter);
 

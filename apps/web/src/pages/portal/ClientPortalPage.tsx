@@ -32,14 +32,22 @@ import {
   Skeleton,
 } from "@alpha-cut/ui";
 import { useAuth } from "../../context/AuthContext.js";
-import { EDITING_STYLES, type Project, type VideoFormat, type EditingStyle, type PackageTier } from "@alpha-cut/types";
+import { EDITING_STYLES, type Project, type VideoFormat, type EditingStyle, type PackageTier, type Proposal } from "@alpha-cut/types";
 
 export function ClientPortalPage() {
   const { user, logout, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
 
   const [projects, setProjects] = useState<Project[]>([]);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
+  const [loadingProposals, setLoadingProposals] = useState(true);
+
+  // Proposal Modals & Actions
+  const [proposalRevisionModal, setProposalRevisionModal] = useState<Proposal | null>(null);
+  const [proposalRevisionNotes, setProposalRevisionNotes] = useState("");
+  const [submittingProposalRevision, setSubmittingProposalRevision] = useState(false);
+  const [acceptingProposalId, setAcceptingProposalId] = useState<string | null>(null);
 
   // Wizard state
   const [showWizard, setShowWizard] = useState(false);
@@ -80,13 +88,81 @@ export function ClientPortalPage() {
     }
   };
 
+  const fetchProposals = async () => {
+    try {
+      setLoadingProposals(true);
+      const res = await fetch("/api/proposals");
+      if (res.ok) {
+        const data = await res.json();
+        const propList: Proposal[] = data.proposals || [];
+        setProposals(propList);
+
+        // Auto-mark newly viewed proposals
+        for (const p of propList) {
+          if (p.status === "sent" && p._id) {
+            fetch(`/api/proposals/${p._id}`).catch(() => {});
+          }
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingProposals(false);
+    }
+  };
+
   useEffect(() => {
     if (!authLoading && !user) {
       navigate("/login");
     } else if (user) {
       fetchProjects();
+      fetchProposals();
     }
   }, [user, authLoading, navigate]);
+
+  const handleAcceptFormalProposal = async (proposalId: string) => {
+    try {
+      setAcceptingProposalId(proposalId);
+      const res = await fetch(`/api/proposals/${proposalId}/accept`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to accept proposal");
+      }
+      notify.success("Proposal Accepted!", "Your project is now officially activated and in production.");
+      await Promise.all([fetchProposals(), fetchProjects()]);
+    } catch (err: any) {
+      notify.error("Error", err.message);
+    } finally {
+      setAcceptingProposalId(null);
+    }
+  };
+
+  const handleRequestProposalRevision = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!proposalRevisionModal?._id || !proposalRevisionNotes.trim()) return;
+    try {
+      setSubmittingProposalRevision(true);
+      const res = await fetch(`/api/proposals/${proposalRevisionModal._id}/request-revision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: proposalRevisionNotes }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to submit revision request");
+      }
+      notify.success("Revision Request Sent", "Amir & Aymen will review and dispatch updated terms.");
+      setProposalRevisionModal(null);
+      setProposalRevisionNotes("");
+      await fetchProposals();
+    } catch (err: any) {
+      notify.error("Error", err.message);
+    } finally {
+      setSubmittingProposalRevision(false);
+    }
+  };
 
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -266,13 +342,182 @@ export function ClientPortalPage() {
           </Button>
         </div>
 
+        {/* PENDING PROPOSALS & AGREEMENTS SECTION */}
+        {proposals.length > 0 && (
+          <div className="mb-12 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg sm:text-xl font-extrabold text-[#181818] dark:text-[#F5F3EC] flex items-center gap-2">
+                  <File01Icon className="h-5 w-5 text-brand-brown dark:text-brand-terracotta" />
+                  <span>Proposals & Project Agreements</span>
+                </h2>
+                <p className="text-xs text-[#868686] dark:text-[#8C8A89] mt-0.5">
+                  Review terms, negotiate pricing or timeline, and officially activate production.
+                </p>
+              </div>
+              <Badge variant="secondary" className="text-xs">
+                {proposals.filter((p) => p.status === "sent" || p.status === "viewed").length} Pending Action
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {proposals.map((prop) => {
+                const activeVersion =
+                  prop.versions.find((v) => v.version === prop.currentVersion) || prop.versions[0];
+                const isActionable = prop.status === "sent" || prop.status === "viewed";
+
+                return (
+                  <Card
+                    key={prop._id}
+                    className={`flex flex-col justify-between border ${
+                      isActionable
+                        ? "border-[#E4BCAE] dark:border-[#754637] shadow-sm bg-gradient-to-br from-white to-[#FBEFE1]/20 dark:from-[#161412] dark:to-[#754637]/10"
+                        : "border-[#E5E5EA] dark:border-[#33302C]"
+                    }`}
+                  >
+                    <CardHeader>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs font-bold text-brand-brown dark:text-brand-terracotta">
+                            {prop.proposalNumber}
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 font-bold">
+                            v{prop.currentVersion}
+                          </span>
+                        </div>
+                        <Badge
+                          variant={
+                            prop.status === "accepted"
+                              ? "success"
+                              : prop.status === "revision_requested"
+                              ? "warning"
+                              : isActionable
+                              ? "default"
+                              : "secondary"
+                          }
+                          className="text-[10px] font-bold uppercase tracking-wider"
+                        >
+                          {prop.status.replace("_", " ")}
+                        </Badge>
+                      </div>
+
+                      <CardTitle className="text-lg sm:text-xl">
+                        {activeVersion?.title || prop.proposalNumber}
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        {activeVersion?.format === "short_form"
+                          ? "Short-Form (Reels / TikTok)"
+                          : "Long-Form (YouTube / Course)"}{" "}
+                        &bull; {activeVersion?.style ? (EDITING_STYLES[activeVersion.style]?.label || activeVersion.style) : ""}
+                      </CardDescription>
+                    </CardHeader>
+
+                    <CardContent className="space-y-4">
+                      {/* Financial & Terms Summary */}
+                      <div className="p-4 rounded-xl bg-[#FBEFE1] dark:bg-[#754637]/25 border border-[#E4BCAE] dark:border-[#754637]/40">
+                        <div className="flex justify-between items-baseline mb-2">
+                          <span className="text-xs font-bold text-[#451D13] dark:text-[#FBEFE1]/80 uppercase tracking-wider">
+                            Agreed Investment
+                          </span>
+                          <span className="text-2xl font-black text-[#451D13] dark:text-[#FBEFE1]">
+                            {activeVersion?.price?.toLocaleString()} {activeVersion?.currency}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-xs text-[#451D13] dark:text-[#FBEFE1]/90 pt-2 border-t border-[#E4BCAE]/60 dark:border-[#754637]/60">
+                          <div>
+                            <span className="block text-[10px] text-[#451D13]/70 dark:text-[#FBEFE1]/60">
+                              Delivery Target
+                            </span>
+                            <span className="font-bold">
+                              {activeVersion?.deadline
+                                ? new Date(activeVersion.deadline).toLocaleDateString()
+                                : "TBD"}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="block text-[10px] text-[#451D13]/70 dark:text-[#FBEFE1]/60">
+                              Included Revisions
+                            </span>
+                            <span className="font-bold">{activeVersion?.revisionsAllowed} rounds</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Notes / Inclusions */}
+                      {activeVersion?.notes && (
+                        <div className="text-xs text-[#868686] dark:text-[#8C8A89] space-y-1">
+                          <span className="text-[11px] font-semibold text-[#181818] dark:text-[#F5F3EC] block">
+                            Scope Inclusions:
+                          </span>
+                          <p className="leading-relaxed bg-black/5 dark:bg-white/5 p-3 rounded-xl border border-[#E5E5EA] dark:border-[#33302C]">
+                            {activeVersion.notes}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Revision Feedback alert if requested */}
+                      {prop.status === "revision_requested" && (
+                        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs">
+                          <span className="font-bold text-amber-700 dark:text-amber-400 block mb-1">
+                            Revision Requested by You:
+                          </span>
+                          <p className="italic text-[#868686] dark:text-[#8C8A89]">"{prop.revisionFeedback}"</p>
+                          <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-2">
+                            Amir & Aymen are preparing updated terms (v{prop.currentVersion + 1}).
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Accepted Banner */}
+                      {prop.status === "accepted" && (
+                        <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs flex items-center justify-between text-emerald-700 dark:text-emerald-400 font-semibold">
+                          <span>Accepted & Activated in Production</span>
+                          <CheckmarkCircle02Icon className="h-4 w-4" />
+                        </div>
+                      )}
+                    </CardContent>
+
+                    {/* Action Buttons */}
+                    {isActionable && (
+                      <CardFooter className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-[#E5E5EA] dark:border-[#33302C]">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full sm:w-auto flex-1"
+                          onClick={() => {
+                            setProposalRevisionModal(prop);
+                            setProposalRevisionNotes("");
+                          }}
+                        >
+                          Request Changes
+                        </Button>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          className="w-full sm:w-auto flex-1 gap-1.5"
+                          isLoading={acceptingProposalId === prop._id}
+                          onClick={() => prop._id && handleAcceptFormalProposal(prop._id)}
+                        >
+                          <CheckmarkCircle02Icon className="h-4 w-4" />
+                          <span>Accept & Start Production</span>
+                        </Button>
+                      </CardFooter>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Loading state */}
         {loadingProjects ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <Skeleton className="h-48 rounded-[20px]" />
             <Skeleton className="h-48 rounded-[20px]" />
           </div>
-        ) : projects.length === 0 && !showWizard ? (
+        ) : projects.length === 0 && proposals.length === 0 && !showWizard ? (
           /* Empty state / Welcome wizard invite */
           <Card className="text-center py-16 px-6 max-w-xl mx-auto border border-[#E5E5EA] dark:border-[#33302C]">
             <div className="h-16 w-16 rounded-full bg-brand-brown/10 text-brand-brown dark:text-brand-terracotta flex items-center justify-center mx-auto mb-4">
@@ -737,6 +982,55 @@ export function ClientPortalPage() {
                   Submit Review
                 </Button>
               </div>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* Proposal Revision Request Modal */}
+        {proposalRevisionModal && (
+          <Dialog open={!!proposalRevisionModal} onOpenChange={() => setProposalRevisionModal(null)}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Request Terms Revision</DialogTitle>
+                <DialogDescription>
+                  For {proposalRevisionModal.proposalNumber} (v{proposalRevisionModal.currentVersion})
+                </DialogDescription>
+              </DialogHeader>
+
+              <form onSubmit={handleRequestProposalRevision} className="space-y-4 pt-2">
+                <div>
+                  <Label required>What would you like adjusted?</Label>
+                  <Textarea
+                    placeholder="e.g. Can we adjust price to 4,500 ETB, extend delivery by 2 days, or include 1 more revision?"
+                    value={proposalRevisionNotes}
+                    onChange={(e) => setProposalRevisionNotes(e.target.value)}
+                    rows={4}
+                    required
+                  />
+                  <p className="text-[11px] text-[#868686] mt-1">
+                    Amir & Aymen will review your notes and issue a revised version (v{proposalRevisionModal.currentVersion + 1}).
+                  </p>
+                </div>
+
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => setProposalRevisionModal(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    className="flex-1"
+                    isLoading={submittingProposalRevision}
+                  >
+                    Send Request
+                  </Button>
+                </div>
+              </form>
             </DialogContent>
           </Dialog>
         )}

@@ -1,5 +1,10 @@
 import { Router, Request, Response } from "express";
-import { getProjectsCollection, getInquiriesCollection } from "../db.js";
+import {
+  getProjectsCollection,
+  getInquiriesCollection,
+  getProposalsCollection,
+  getInvoicesCollection,
+} from "../db.js";
 import { sendTelegramMessage, answerCallbackQuery } from "../services/telegram.js";
 import { EDITING_STYLES } from "@alpha-cut/types";
 
@@ -7,6 +12,8 @@ const router = Router();
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
 const CLIENT_URL = process.env.CLIENT_URL || "https://alpha-cut.com";
 const MINIAPP_URL = process.env.MINIAPP_URL || "https://app.alpha-cut.com";
+const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
+const ADMIN_USERNAMES = ["amir_alpha_cut", "aymen_editor"];
 
 router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
   try {
@@ -23,13 +30,14 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
     let text = "";
     let callbackId: string | undefined;
     let senderName = "there";
+    let senderUsername = "";
 
     if (callback_query) {
       chatId = callback_query.message?.chat?.id;
       text = callback_query.data || "";
       callbackId = callback_query.id;
       senderName = callback_query.from?.first_name || "there";
-      // Acknowledge the callback query so loading indicator disappears
+      senderUsername = (callback_query.from?.username || "").toLowerCase();
       if (callbackId) {
         await answerCallbackQuery(callbackId);
       }
@@ -37,6 +45,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       chatId = message.chat.id;
       text = message.text.trim();
       senderName = message.from?.first_name || "there";
+      senderUsername = (message.from?.username || "").toLowerCase();
     } else {
       res.sendStatus(200);
       return;
@@ -47,9 +56,156 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const isSuperAdmin =
+      (ADMIN_CHAT_ID && String(chatId) === String(ADMIN_CHAT_ID)) ||
+      ADMIN_USERNAMES.includes(senderUsername);
+
     const command = text.split(" ")[0].toLowerCase();
 
-    // 1. /start command & deep-linking
+    // ==========================================
+    // 1. SUPER ADMIN WORKFLOW & COMMANDS
+    // ==========================================
+    if (isSuperAdmin) {
+      const projects = getProjectsCollection();
+      const proposals = getProposalsCollection();
+      const inquiries = getInquiriesCollection();
+      const invoices = getInvoicesCollection();
+
+      // Admin Start & Menu
+      if (command === "/start" || command === "/admin" || command === "/menu" || command === "admin_menu") {
+        const activeCount = await projects.countDocuments({ stage: { $in: ["in_progress", "in_review", "revision_requested"] } });
+        const pendingProposals = await proposals.countDocuments({ status: { $in: ["draft", "sent", "viewed", "revision_requested"] } });
+        const newInquiries = await inquiries.countDocuments({ status: "new" });
+
+        await sendTelegramMessage({
+          chatId,
+          text:
+            `👑 <b>Alpha Cut Agency Executive Command</b>\n\n` +
+            `Welcome back, <b>${senderName}</b>. Here is your operational snapshot:\n\n` +
+            `• <b>Active Cuts in Production:</b> ${activeCount}\n` +
+            `• <b>Active Proposals:</b> ${pendingProposals}\n` +
+            `• <b>New Leads / Inquiries:</b> ${newInquiries}\n\n` +
+            `<b>Quick Executive Commands:</b>\n` +
+            `• /proposals — Review sent & negotiating proposals\n` +
+            `• /pipeline — Check active editor timelines\n` +
+            `• /finance — Review invoices & revenue ledger\n` +
+            `• /status — Global capacity & system health`,
+          parseMode: "HTML",
+          replyMarkup: {
+            inline_keyboard: [
+              [
+                { text: "📊 Open Admin ERP", url: `${CLIENT_URL}/admin` },
+                { text: "📑 View Proposals", callback_data: "admin_proposals" },
+              ],
+              [
+                { text: "🎬 Production Pipeline", callback_data: "admin_pipeline" },
+                { text: "💰 Financial Ledger", callback_data: "admin_finance" },
+              ],
+              [
+                { text: "🚀 Preview Client Mini App", web_app: { url: MINIAPP_URL } },
+              ],
+            ],
+          },
+        });
+        res.sendStatus(200);
+        return;
+      }
+
+      // Admin Proposals List
+      if (command === "/proposals" || command === "admin_proposals") {
+        const list = await proposals.find({}).sort({ updatedAt: -1 }).limit(6).toArray();
+        if (list.length === 0) {
+          await sendTelegramMessage({
+            chatId,
+            text: `📑 <b>Proposals Board</b>\n\nNo proposals currently created. You can craft one in the Admin ERP.`,
+            parseMode: "HTML",
+            replyMarkup: {
+              inline_keyboard: [[{ text: "📝 Craft Proposal in ERP", url: `${CLIENT_URL}/admin` }]],
+            },
+          });
+        } else {
+          const lines = list.map((p, idx) => {
+            const v = p.versions[p.currentVersion - 1];
+            return `${idx + 1}. <b>${p.proposalNumber}</b> (v${p.currentVersion}) — <code>${p.status.toUpperCase()}</code>\n   • Client: ${p.clientName} | ${v.price} ${v.currency}`;
+          });
+
+          await sendTelegramMessage({
+            chatId,
+            text: `📑 <b>Recent Client Proposals (${list.length}):</b>\n\n${lines.join("\n\n")}`,
+            parseMode: "HTML",
+            replyMarkup: {
+              inline_keyboard: [
+                [{ text: "📊 Open Proposal Manager", url: `${CLIENT_URL}/admin` }],
+                [{ text: "⬅️ Back to Command Menu", callback_data: "admin_menu" }],
+              ],
+            },
+          });
+        }
+        res.sendStatus(200);
+        return;
+      }
+
+      // Admin Production Pipeline
+      if (command === "/pipeline" || command === "admin_pipeline") {
+        const list = await projects.find({ stage: { $ne: "completed" } }).limit(8).toArray();
+        if (list.length === 0) {
+          await sendTelegramMessage({
+            chatId,
+            text: `🎬 <b>Production Pipeline</b>\n\nNo cuts currently on timeline. Full capacity open!`,
+            parseMode: "HTML",
+          });
+        } else {
+          const lines = list.map((p, idx) => {
+            const editor = p.assignedEditor === "amir" ? "Amir" : p.assignedEditor === "aymen" ? "Aymen" : "Unassigned";
+            return `${idx + 1}. <b>${p.title}</b>\n   • Stage: <code>${p.stage}</code> | Lead: ${editor} | Due: ${new Date(p.deadline).toLocaleDateString()}`;
+          });
+
+          await sendTelegramMessage({
+            chatId,
+            text: `🎬 <b>Active Cuts in Production (${list.length}):</b>\n\n${lines.join("\n\n")}`,
+            parseMode: "HTML",
+            replyMarkup: {
+              inline_keyboard: [
+                [{ text: "📊 Open Production Board", url: `${CLIENT_URL}/admin` }],
+                [{ text: "⬅️ Back to Command Menu", callback_data: "admin_menu" }],
+              ],
+            },
+          });
+        }
+        res.sendStatus(200);
+        return;
+      }
+
+      // Admin Financial Ledger
+      if (command === "/finance" || command === "admin_finance") {
+        const unpaidInvoices = await invoices.find({ status: { $ne: "paid" } }).toArray();
+        const totalPending = unpaidInvoices.reduce((acc, inv) => acc + (inv.amount || 0), 0);
+
+        await sendTelegramMessage({
+          chatId,
+          text:
+            `💰 <b>Financial Overview</b>\n\n` +
+            `• <b>Unpaid / Pending Invoices:</b> ${unpaidInvoices.length}\n` +
+            `• <b>Outstanding Receivables:</b> $${totalPending.toLocaleString()} USD (approx)\n\n` +
+            `View detailed revenue, expense logging, and invoice generation in the Admin ERP:`,
+          parseMode: "HTML",
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: "📊 Financial Analytics ERP", url: `${CLIENT_URL}/admin` }],
+              [{ text: "⬅️ Back to Command Menu", callback_data: "admin_menu" }],
+            ],
+          },
+        });
+        res.sendStatus(200);
+        return;
+      }
+    }
+
+    // ==========================================
+    // 2. CLIENT WORKFLOW & COMMANDS
+    // ==========================================
+
+    // /start command & deep-linking
     if (command === "/start") {
       const parts = text.split(" ");
       const param = parts[1];
@@ -96,7 +252,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
           replyMarkup: {
             inline_keyboard: [
               [
-                { text: "🚀 Open Mini App", web_app: { url: MINIAPP_URL } },
+                { text: "🚀 Open Client Portal", web_app: { url: MINIAPP_URL } },
                 { text: "📝 Submit New Brief", web_app: { url: `${MINIAPP_URL}?tab=new_brief` } },
               ],
               [
@@ -109,7 +265,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       }
     }
 
-    // 2. /menu command or callback
+    // /menu command or callback
     else if (command === "/menu" || command === "cmd_menu") {
       await sendTelegramMessage({
         chatId,
@@ -134,7 +290,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       });
     }
 
-    // 3. /status command or callback
+    // /status command or callback
     else if (command === "/status" || command === "cmd_status") {
       const projects = getProjectsCollection();
       const inquiries = getInquiriesCollection();
@@ -159,45 +315,21 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       });
     }
 
-    // 4. /projects command or callback
+    // /projects command or callback
     else if (command === "/projects" || command === "cmd_projects") {
-      const projects = getProjectsCollection();
-      const list = await projects
-        .find({ stage: { $ne: "completed" } })
-        .limit(8)
-        .toArray();
-
-      if (list.length === 0) {
-        await sendTelegramMessage({
-          chatId,
-          text: `🎬 <b>Active Pipeline</b>\n\nNo active video cuts currently in production. Capacity is fully open for new briefs!`,
-          parseMode: "HTML",
-          replyMarkup: {
-            inline_keyboard: [
-              [{ text: "⚡ Submit New Brief", web_app: { url: `${MINIAPP_URL}?tab=new_brief` } }],
-            ],
-          },
-        });
-      } else {
-        const lines = list.map((p, idx) => {
-          const editor = p.assignedEditor === "amir" ? "Amir" : p.assignedEditor === "aymen" ? "Aymen" : "Unassigned";
-          return `${idx + 1}. <b>${p.title}</b>\n   • Stage: <code>${p.stage}</code> | Editor: ${editor}`;
-        });
-
-        await sendTelegramMessage({
-          chatId,
-          text: `🎬 <b>Active Production Pipeline (${list.length} in-flight):</b>\n\n${lines.join("\n\n")}`,
-          parseMode: "HTML",
-          replyMarkup: {
-            inline_keyboard: [
-              [{ text: "🚀 Open Projects in Mini App", web_app: { url: MINIAPP_URL } }],
-            ],
-          },
-        });
-      }
+      await sendTelegramMessage({
+        chatId,
+        text: `🎬 <b>Alpha Cut Client Workspace</b>\n\nView your formal proposals, active cuts, and revision requests directly in the client dashboard:`,
+        parseMode: "HTML",
+        replyMarkup: {
+          inline_keyboard: [
+            [{ text: "🚀 Open Client Workspace", web_app: { url: MINIAPP_URL } }],
+          ],
+        },
+      });
     }
 
-    // 5. /deadlines command or callback
+    // /deadlines command or callback
     else if (command === "/deadlines" || command === "cmd_deadlines") {
       const projects = getProjectsCollection();
       const now = new Date();
@@ -228,7 +360,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       }
     }
 
-    // 6. /packages command or callback
+    // /packages command or callback
     else if (command === "/packages" || command === "cmd_packages") {
       await sendTelegramMessage({
         chatId,
@@ -245,7 +377,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       });
     }
 
-    // 7. /styles command or callback
+    // /styles command or callback
     else if (command === "/styles" || command === "cmd_styles") {
       const styleItems = Object.entries(EDITING_STYLES).map(([, item]) => {
         return `• <b>${item.label}</b>\n  ${item.tagline}\n  <i>Best for: ${item.bestFor}</i>`;
@@ -263,7 +395,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       });
     }
 
-    // 8. /about command or callback
+    // /about command or callback
     else if (command === "/about" || command === "cmd_about") {
       await sendTelegramMessage({
         chatId,
@@ -278,7 +410,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       });
     }
 
-    // 9. /help command or callback
+    // /help command or callback
     else if (command === "/help" || command === "cmd_help") {
       await sendTelegramMessage({
         chatId,
@@ -295,7 +427,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       });
     }
 
-    // 10. Fallback for free-form user messages
+    // Fallback for free-form user messages
     else {
       await sendTelegramMessage({
         chatId,

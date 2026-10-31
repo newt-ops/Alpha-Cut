@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { RegisterInputSchema, LoginInputSchema } from "@alpha-cut/types";
 import { getUsersCollection } from "../db.js";
-import { signAccessToken, requireAuth } from "../middleware/auth.js";
+import { signAccessToken, requireAuth, requireRole } from "../middleware/auth.js";
 
 const router = Router();
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "alphacutagency@gmail.com")
@@ -132,6 +132,23 @@ router.post("/login", async (req: Request, res: Response): Promise<void> => {
   } catch (error) {
     console.error("[Auth Login Error]:", error);
     res.status(500).json({ error: "Login failed" });
+  }
+});
+
+// GET /api/auth/clients (Super Admin only: list registered clients for proposal crafting)
+router.get("/clients", requireAuth, requireRole(["super_admin"]), async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const users = getUsersCollection();
+    const clients = await users
+      .find({ role: "client" })
+      .project({ _id: 1, name: 1, email: 1, telegramUsername: 1, createdAt: 1 })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.json({ clients });
+  } catch (error) {
+    console.error("[Get Clients Error]:", error);
+    res.status(500).json({ error: "Failed to fetch clients" });
   }
 });
 

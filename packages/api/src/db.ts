@@ -1,6 +1,6 @@
 import { MongoClient, Db, Collection } from "mongodb";
 import dotenv from "dotenv";
-import type { User, Inquiry, Project, Invoice, Expense } from "@alpha-cut/types";
+import type { User, Inquiry, Project, Invoice, Expense, Proposal } from "@alpha-cut/types";
 
 dotenv.config();
 
@@ -42,6 +42,10 @@ export function getUsersCollection(): Collection<User> {
 
 export function getInquiriesCollection(): Collection<Inquiry> {
   return getDB().collection<Inquiry>("inquiries");
+}
+
+export function getProposalsCollection(): Collection<Proposal> {
+  return getDB().collection<Proposal>("proposals");
 }
 
 export function getProjectsCollection(): Collection<Project> {

@@ -33,21 +33,66 @@ import {
   Skeleton,
 } from "@alpha-cut/ui";
 import { useAuth } from "../../context/AuthContext.js";
-import type { Project, Inquiry, Invoice, Expense, ProjectStage, PackageTier } from "@alpha-cut/types";
+import type {
+  Project,
+  Inquiry,
+  Invoice,
+  Expense,
+  ProjectStage,
+  PackageTier,
+  Proposal,
+  ProposalVersion,
+  VideoFormat,
+  EditingStyle,
+} from "@alpha-cut/types";
 
 export function AdminERPPage() {
   const { user, logout, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState<"overview" | "pipeline" | "inquiries" | "finances" | "reviews">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "proposals" | "pipeline" | "inquiries" | "finances" | "reviews">("overview");
 
   // Data states
   const [projects, setProjects] = useState<Project[]>([]);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [clients, setClients] = useState<any[]>([]);
   const [inquiries, setInquiries] = useState<Inquiry[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [financeSummary, setFinanceSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  // Proposal Modals
+  const [newProposalModal, setNewProposalModal] = useState(false);
+  const [newProposalForm, setNewProposalForm] = useState({
+    clientId: "",
+    clientName: "",
+    clientEmail: "",
+    clientTelegram: "",
+    title: "",
+    format: "short_form" as VideoFormat,
+    style: "viral_animation" as EditingStyle,
+    tier: "professional" as PackageTier,
+    price: 350,
+    currency: "USD" as "USD" | "ETB",
+    revisionsAllowed: 2,
+    deadline: new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+    footageUrl: "",
+    notes: "",
+    assignedEditor: "amir" as "amir" | "aymen",
+    status: "draft" as "draft" | "sent",
+  });
+
+  const [versionModalProposal, setVersionModalProposal] = useState<Proposal | null>(null);
+  const [versionForm, setVersionForm] = useState({
+    title: "",
+    price: 350,
+    currency: "USD" as "USD" | "ETB",
+    revisionsAllowed: 2,
+    deadline: "",
+    notes: "",
+    assignedEditor: "amir" as "amir" | "aymen",
+  });
 
   // Modals
   const [proposalProject, setProposalProject] = useState<Project | null>(null);
@@ -89,12 +134,14 @@ export function AdminERPPage() {
   const fetchAllData = async () => {
     try {
       setLoading(true);
-      const [projRes, inqRes, invRes, expRes, sumRes] = await Promise.all([
+      const [projRes, inqRes, invRes, expRes, sumRes, propRes, clientRes] = await Promise.all([
         fetch("/api/projects"),
         fetch("/api/inquiries"),
         fetch("/api/finances/invoices"),
         fetch("/api/finances/expenses"),
         fetch("/api/finances/summary"),
+        fetch("/api/proposals"),
+        fetch("/api/auth/clients"),
       ]);
 
       if (projRes.ok) setProjects((await projRes.json()).projects || []);
@@ -102,11 +149,107 @@ export function AdminERPPage() {
       if (invRes.ok) setInvoices((await invRes.json()).invoices || []);
       if (expRes.ok) setExpenses((await expRes.json()).expenses || []);
       if (sumRes.ok) setFinanceSummary((await sumRes.json()).summary || null);
+      if (propRes.ok) setProposals((await propRes.json()).proposals || []);
+      if (clientRes.ok) setClients((await clientRes.json()).clients || []);
     } catch {
       notify.error("Error", "Could not load ERP data");
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleCreateProposal = async (e: React.FormEvent, status: "draft" | "sent") => {
+    e.preventDefault();
+    if (!newProposalForm.clientEmail) {
+      notify.error("Client Required", "Please select or enter client email");
+      return;
+    }
+
+    try {
+      const payload = {
+        ...newProposalForm,
+        status,
+      };
+
+      const res = await fetch("/api/proposals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error("Failed to create proposal");
+      const data = await res.json();
+
+      notify.success(
+        status === "sent" ? "Proposal Sent!" : "Draft Saved",
+        status === "sent" ? `Dispatched to ${newProposalForm.clientName} on Telegram` : "Saved to ERP drafts"
+      );
+
+      setNewProposalModal(false);
+      fetchAllData();
+    } catch (err: any) {
+      notify.error("Error creating proposal", err.message);
+    }
+  };
+
+  const handleSendDraftProposal = async (proposalId: string) => {
+    try {
+      const res = await fetch(`/api/proposals/${proposalId}/send`, {
+        method: "PATCH",
+      });
+      if (!res.ok) throw new Error("Failed to send proposal");
+
+      notify.success("Proposal Sent", "Client has been notified via Telegram & Portal");
+      fetchAllData();
+    } catch (err: any) {
+      notify.error("Failed to send", err.message);
+    }
+  };
+
+  const handleCreateNewVersion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!versionModalProposal) return;
+
+    try {
+      const res = await fetch(`/api/proposals/${versionModalProposal._id}/version`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(versionForm),
+      });
+
+      if (!res.ok) throw new Error("Failed to create version");
+      const data = await res.json();
+
+      notify.success("New Version Dispatched", `Created v${data.version} with updated terms`);
+      setVersionModalProposal(null);
+      fetchAllData();
+    } catch (err: any) {
+      notify.error("Version creation failed", err.message);
+    }
+  };
+
+  const handleConvertInquiryToProposal = (inq: Inquiry) => {
+    // Check if client exists in clients list
+    const matchedClient = clients.find((c) => c.email.toLowerCase() === inq.email.toLowerCase());
+
+    setNewProposalForm({
+      ...newProposalForm,
+      clientId: matchedClient ? matchedClient._id : "",
+      clientName: inq.name,
+      clientEmail: inq.email,
+      clientTelegram: inq.telegramUsername || "",
+      title: `${inq.style.replace("_", " ").toUpperCase()} Project for ${inq.name}`,
+      format: inq.format,
+      style: inq.style,
+      tier: "professional",
+      price: inq.budget ? Number(inq.budget.replace(/[^0-9]/g, "")) || 350 : 350,
+      notes: inq.notes,
+      deadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+      assignedEditor: "amir",
+      status: "draft",
+    });
+
+    setNewProposalModal(true);
   };
 
   useEffect(() => {
@@ -277,6 +420,16 @@ export function AdminERPPage() {
               onClick={() => setActiveTab("overview")}
             >
               Overview
+            </button>
+            <button
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                activeTab === "proposals"
+                  ? "bg-white dark:bg-[#252321] text-[#181818] dark:text-[#F5F3EC] shadow-sm"
+                  : "text-[#868686] hover:text-[#181818]"
+              }`}
+              onClick={() => setActiveTab("proposals")}
+            >
+              Proposals ({proposals.length})
             </button>
             <button
               className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
@@ -495,6 +648,172 @@ export function AdminERPPage() {
               </div>
             )}
 
+            {/* PROPOSALS TAB */}
+            {activeTab === "proposals" && (
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-xl font-bold text-[#181818] dark:text-[#F5F3EC]">
+                      Client Proposals & Agreements
+                    </h2>
+                    <p className="text-xs text-[#868686] mt-1">
+                      Draft formal scopes, negotiate terms with version history, and dispatch agreements to clients. Projects activate automatically upon client acceptance.
+                    </p>
+                  </div>
+                  <Button
+                    variant="primary"
+                    className="gap-2 self-start sm:self-auto"
+                    onClick={() => setNewProposalModal(true)}
+                  >
+                    <PlusSignIcon className="h-4 w-4" />
+                    <span>Create Proposal</span>
+                  </Button>
+                </div>
+
+                {proposals.length === 0 ? (
+                  <Card className="text-center py-16 px-6 border border-[#E5E5EA] dark:border-[#33302C]">
+                    <div className="h-14 w-14 rounded-2xl bg-brand-brown/10 text-brand-brown dark:text-brand-terracotta flex items-center justify-center mx-auto mb-3">
+                      <File01Icon className="h-7 w-7" />
+                    </div>
+                    <CardTitle className="text-lg font-bold">No Proposals Yet</CardTitle>
+                    <CardDescription className="text-xs max-w-sm mx-auto mt-1">
+                      Craft a formal scope proposal for any registered client. Set agreed price, format, style, and turnaround deadline.
+                    </CardDescription>
+                    <div className="mt-5">
+                      <Button variant="primary" onClick={() => setNewProposalModal(true)}>
+                        Create First Proposal
+                      </Button>
+                    </div>
+                  </Card>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {proposals.map((prop) => {
+                      const v = prop.versions[prop.currentVersion - 1];
+                      return (
+                        <Card
+                          key={prop._id}
+                          className="border border-[#E5E5EA] dark:border-[#33302C] flex flex-col justify-between"
+                        >
+                          <CardHeader className="pb-3">
+                            <div className="flex justify-between items-start gap-2 mb-2">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-brand-brown dark:text-brand-terracotta">
+                                {prop.proposalNumber} &bull; v{prop.currentVersion}
+                              </span>
+                              <Badge
+                                variant={
+                                  prop.status === "accepted"
+                                    ? "success"
+                                    : prop.status === "revision_requested"
+                                    ? "warning"
+                                    : prop.status === "sent" || prop.status === "viewed"
+                                    ? "default"
+                                    : "secondary"
+                                }
+                                className="text-[9px] uppercase font-bold"
+                              >
+                                {prop.status.replace("_", " ")}
+                              </Badge>
+                            </div>
+                            <CardTitle className="text-base">{v.title}</CardTitle>
+                            <CardDescription className="text-xs">
+                              Client: <span className="font-semibold text-[#181818] dark:text-[#F5F3EC]">{prop.clientName}</span> ({prop.clientEmail})
+                            </CardDescription>
+                          </CardHeader>
+
+                          <CardContent className="space-y-3 text-xs">
+                            <div className="p-3 rounded-xl bg-black/5 dark:bg-white/5 space-y-1.5 border border-[#E5E5EA] dark:border-[#33302C]">
+                              <div className="flex justify-between font-bold text-sm">
+                                <span>Agreed Investment:</span>
+                                <span className="text-brand-brown dark:text-brand-terracotta">
+                                  {v.price.toLocaleString()} {v.currency}
+                                </span>
+                              </div>
+                              <div className="flex justify-between text-[#868686] text-[11px]">
+                                <span>Format: {v.format === "short_form" ? "9:16 Short" : "16:9 Long"}</span>
+                                <span>Tier: {v.tier}</span>
+                              </div>
+                              <div className="flex justify-between text-[#868686] text-[11px]">
+                                <span>Revisions: {v.revisionsAllowed} rounds</span>
+                                <span>Due: {new Date(v.deadline).toLocaleDateString()}</span>
+                              </div>
+                              <div className="flex justify-between text-[#868686] text-[11px]">
+                                <span>Lead Editor:</span>
+                                <span className="font-semibold text-[#181818] dark:text-[#F5F3EC]">
+                                  {v.assignedEditor.toUpperCase()}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Revision feedback alert if requested by client */}
+                            {prop.status === "revision_requested" && prop.revisionFeedback && (
+                              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs space-y-1">
+                                <span className="font-bold text-amber-700 dark:text-amber-400 block text-[11px]">
+                                  Client Requested Changes:
+                                </span>
+                                <p className="italic text-[#868686] dark:text-[#8C8A89]">
+                                  "{prop.revisionFeedback}"
+                                </p>
+                              </div>
+                            )}
+
+                            {/* View tracking timestamp */}
+                            {prop.viewedAt && (
+                              <p className="text-[10px] text-[#868686]">
+                                Viewed by client on {new Date(prop.viewedAt).toLocaleDateString()}
+                              </p>
+                            )}
+
+                            {/* Accepted timestamp & link */}
+                            {prop.status === "accepted" && (
+                              <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs flex items-center justify-between text-emerald-700 dark:text-emerald-400 font-semibold">
+                                <span>Project Activated & On Timeline</span>
+                                <CheckmarkCircle02Icon className="h-4 w-4" />
+                              </div>
+                            )}
+                          </CardContent>
+
+                          <div className="p-4 pt-0 border-t border-[#E5E5EA] dark:border-[#33302C] mt-2 flex flex-col gap-2">
+                            {prop.status === "draft" && (
+                              <Button
+                                size="sm"
+                                variant="primary"
+                                className="w-full"
+                                onClick={() => prop._id && handleSendDraftProposal(prop._id)}
+                              >
+                                Send Proposal to Client
+                              </Button>
+                            )}
+
+                            {(prop.status === "sent" || prop.status === "viewed" || prop.status === "revision_requested") && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="w-full"
+                                onClick={() => {
+                                  setVersionModalProposal(prop);
+                                  setVersionForm({
+                                    title: v.title,
+                                    price: v.price,
+                                    currency: v.currency,
+                                    revisionsAllowed: v.revisionsAllowed,
+                                    deadline: typeof v.deadline === "string" ? v.deadline.split("T")[0] : new Date(v.deadline).toISOString().split("T")[0],
+                                    notes: v.notes || "",
+                                    assignedEditor: v.assignedEditor === "aymen" ? "aymen" : "amir",
+                                  });
+                                }}
+                              >
+                                Create Revised Version (v{prop.currentVersion + 1})
+                              </Button>
+                            )}
+                          </div>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* PIPELINE TAB */}
             {activeTab === "pipeline" && (
               <div className="space-y-6">
@@ -631,14 +950,23 @@ export function AdminERPPage() {
                         <p className="text-[#868686]">{inq.notes}</p>
                       </div>
 
-                      <div className="text-[11px] text-[#868686] flex justify-between items-center">
+                      <div className="text-[11px] text-[#868686] flex justify-between items-center pt-1">
                         <span>Received: {new Date(inq.createdAt || Date.now()).toLocaleString()}</span>
-                        <a
-                          href={`mailto:${inq.email}`}
-                          className="font-semibold text-brand-brown dark:text-brand-terracotta hover:underline"
-                        >
-                          Reply via Email
-                        </a>
+                        <div className="flex items-center gap-3">
+                          <a
+                            href={`mailto:${inq.email}`}
+                            className="font-semibold text-[#868686] hover:underline"
+                          >
+                            Email Client
+                          </a>
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onClick={() => handleConvertInquiryToProposal(inq)}
+                          >
+                            Convert to Proposal
+                          </Button>
+                        </div>
                       </div>
                     </Card>
                   ))}
@@ -1031,6 +1359,341 @@ export function AdminERPPage() {
                   </div>
                 </div>
                 <Button type="submit" className="w-full">Log Expense</Button>
+              </form>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* NEW PROPOSAL MODAL */}
+        {newProposalModal && (
+          <Dialog open={newProposalModal} onOpenChange={setNewProposalModal}>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Create Client Proposal</DialogTitle>
+                <DialogDescription>
+                  Craft a formal agreement. Work initiates only after client accepts.
+                </DialogDescription>
+              </DialogHeader>
+
+              <form className="space-y-4 pt-2">
+                {/* Client Picker */}
+                <div className="space-y-2 p-3 rounded-xl bg-[#F9F8F5] dark:bg-[#1E1C1A] border border-[#E5E5EA] dark:border-[#33302C]">
+                  <Label required>Select Registered Client</Label>
+                  <select
+                    className="flex h-11 w-full rounded-xl border border-[#E5E5EA] dark:border-[#33302C] bg-white dark:bg-[#161412] px-4 py-2 text-sm text-[#181818] dark:text-[#F5F3EC]"
+                    value={newProposalForm.clientId}
+                    onChange={(e) => {
+                      const selectedId = e.target.value;
+                      const c = clients.find((client) => client._id === selectedId);
+                      if (c) {
+                        setNewProposalForm({
+                          ...newProposalForm,
+                          clientId: c._id,
+                          clientName: c.name || "",
+                          clientEmail: c.email || "",
+                          clientTelegram: c.telegramUsername || c.telegramChatId || "",
+                        });
+                      } else {
+                        setNewProposalForm({
+                          ...newProposalForm,
+                          clientId: "",
+                        });
+                      }
+                    }}
+                  >
+                    <option value="">-- Choose registered client ({clients.length} clients) --</option>
+                    {clients.map((c) => (
+                      <option key={c._id} value={c._id}>
+                        {c.name} &bull; {c.email} {c.telegramUsername ? `(@${c.telegramUsername})` : ""}
+                      </option>
+                    ))}
+                  </select>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 pt-2">
+                    <div>
+                      <Label className="text-[11px]">Client Name</Label>
+                      <Input
+                        placeholder="Client Name"
+                        value={newProposalForm.clientName}
+                        onChange={(e) => setNewProposalForm({ ...newProposalForm, clientName: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[11px]" required>Client Email</Label>
+                      <Input
+                        type="email"
+                        placeholder="client@domain.com"
+                        value={newProposalForm.clientEmail}
+                        onChange={(e) => setNewProposalForm({ ...newProposalForm, clientEmail: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[11px]">Client Telegram</Label>
+                      <Input
+                        placeholder="@username or Chat ID"
+                        value={newProposalForm.clientTelegram}
+                        onChange={(e) => setNewProposalForm({ ...newProposalForm, clientTelegram: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Proposal Title */}
+                <div>
+                  <Label required>Project Agreement Title</Label>
+                  <Input
+                    placeholder="e.g. 5x Viral Reels - October Launch"
+                    value={newProposalForm.title}
+                    onChange={(e) => setNewProposalForm({ ...newProposalForm, title: e.target.value })}
+                    required
+                  />
+                </div>
+
+                {/* Format, Style, Tier */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <Label required>Format</Label>
+                    <select
+                      className="flex h-11 w-full rounded-xl border border-[#E5E5EA] dark:border-[#33302C] bg-white dark:bg-[#161412] px-4 py-2 text-sm text-[#181818] dark:text-[#F5F3EC]"
+                      value={newProposalForm.format}
+                      onChange={(e) => setNewProposalForm({ ...newProposalForm, format: e.target.value as any })}
+                    >
+                      <option value="short_form">Short Form (Reels/TikTok)</option>
+                      <option value="long_form">Long Form (YouTube/Course)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Label required>Style</Label>
+                    <select
+                      className="flex h-11 w-full rounded-xl border border-[#E5E5EA] dark:border-[#33302C] bg-white dark:bg-[#161412] px-4 py-2 text-sm text-[#181818] dark:text-[#F5F3EC]"
+                      value={newProposalForm.style}
+                      onChange={(e) => setNewProposalForm({ ...newProposalForm, style: e.target.value as any })}
+                    >
+                      <option value="viral_animation">Viral Animation (Hormozi / Vox)</option>
+                      <option value="cinematic_vlog">Cinematic Vlog (Magnates)</option>
+                      <option value="talking_head">Talking Head (Ali Abdaal)</option>
+                      <option value="documentarian">Documentarian (Johnny Harris)</option>
+                      <option value="faceless_automation">Faceless / Cash-cow</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Label required>Package Tier</Label>
+                    <select
+                      className="flex h-11 w-full rounded-xl border border-[#E5E5EA] dark:border-[#33302C] bg-white dark:bg-[#161412] px-4 py-2 text-sm text-[#181818] dark:text-[#F5F3EC]"
+                      value={newProposalForm.tier}
+                      onChange={(e) => setNewProposalForm({ ...newProposalForm, tier: e.target.value as any })}
+                    >
+                      <option value="starter">Starter Cut</option>
+                      <option value="professional">Professional</option>
+                      <option value="enterprise">Enterprise</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Price, Currency, Revisions, Deadline */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div>
+                    <Label required>Price</Label>
+                    <Input
+                      type="number"
+                      value={newProposalForm.price}
+                      onChange={(e) => setNewProposalForm({ ...newProposalForm, price: Number(e.target.value) })}
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <Label required>Currency</Label>
+                    <select
+                      className="flex h-11 w-full rounded-xl border border-[#E5E5EA] dark:border-[#33302C] bg-white dark:bg-[#161412] px-4 py-2 text-sm text-[#181818] dark:text-[#F5F3EC]"
+                      value={newProposalForm.currency}
+                      onChange={(e) => setNewProposalForm({ ...newProposalForm, currency: e.target.value as any })}
+                    >
+                      <option value="USD">USD ($)</option>
+                      <option value="ETB">ETB (Birr)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Label required>Revisions Allowed</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={10}
+                      value={newProposalForm.revisionsAllowed}
+                      onChange={(e) => setNewProposalForm({ ...newProposalForm, revisionsAllowed: Number(e.target.value) })}
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <Label required>Target Deadline</Label>
+                    <Input
+                      type="date"
+                      value={newProposalForm.deadline}
+                      onChange={(e) => setNewProposalForm({ ...newProposalForm, deadline: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+
+                {/* Editor & Footage URL */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <Label required>Assigned Production Lead</Label>
+                    <select
+                      className="flex h-11 w-full rounded-xl border border-[#E5E5EA] dark:border-[#33302C] bg-white dark:bg-[#161412] px-4 py-2 text-sm text-[#181818] dark:text-[#F5F3EC]"
+                      value={newProposalForm.assignedEditor}
+                      onChange={(e) => setNewProposalForm({ ...newProposalForm, assignedEditor: e.target.value as any })}
+                    >
+                      <option value="amir">Amir &bull; Senior Lead Editor</option>
+                      <option value="aymen">Aymen &bull; Creative Director</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Label>Footage / Brief URL (Optional)</Label>
+                    <Input
+                      placeholder="https://drive.google.com/..."
+                      value={newProposalForm.footageUrl}
+                      onChange={(e) => setNewProposalForm({ ...newProposalForm, footageUrl: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                {/* Scope Notes */}
+                <div>
+                  <Label>Scope Notes & Agreed Deliverables</Label>
+                  <textarea
+                    rows={3}
+                    className="flex w-full rounded-xl border border-[#E5E5EA] dark:border-[#33302C] bg-white dark:bg-[#161412] px-4 py-2.5 text-sm text-[#181818] dark:text-[#F5F3EC] focus:outline-none focus:ring-1 focus:ring-brand-brown dark:focus:ring-brand-terracotta"
+                    placeholder="Specific inclusions: Sound design, Alex Hormozi captions, motion graphics, 2 revisions..."
+                    value={newProposalForm.notes}
+                    onChange={(e) => setNewProposalForm({ ...newProposalForm, notes: e.target.value })}
+                  />
+                </div>
+
+                {/* Submission Buttons */}
+                <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#E5E5EA] dark:border-[#33302C]">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={(e) => handleCreateProposal(e, "draft")}
+                  >
+                    Save as Draft
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    onClick={(e) => handleCreateProposal(e, "sent")}
+                  >
+                    Send to Client Now
+                  </Button>
+                </div>
+              </form>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* VERSION PROPOSAL MODAL */}
+        {versionModalProposal && (
+          <Dialog open={!!versionModalProposal} onOpenChange={() => setVersionModalProposal(null)}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>
+                  Create Revised Terms (v{versionModalProposal.currentVersion + 1})
+                </DialogTitle>
+                <DialogDescription>
+                  For {versionModalProposal.proposalNumber} &bull; {versionModalProposal.clientName}
+                </DialogDescription>
+              </DialogHeader>
+
+              <form onSubmit={handleCreateNewVersion} className="space-y-4 pt-2">
+                <div>
+                  <Label required>Agreement Title</Label>
+                  <Input
+                    value={versionForm.title}
+                    onChange={(e) => setVersionForm({ ...versionForm, title: e.target.value })}
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label required>Agreed Price</Label>
+                    <Input
+                      type="number"
+                      value={versionForm.price}
+                      onChange={(e) => setVersionForm({ ...versionForm, price: Number(e.target.value) })}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <Label required>Currency</Label>
+                    <select
+                      className="flex h-11 w-full rounded-xl border border-[#E5E5EA] dark:border-[#33302C] bg-white dark:bg-[#161412] px-4 py-2 text-sm text-[#181818] dark:text-[#F5F3EC]"
+                      value={versionForm.currency}
+                      onChange={(e) => setVersionForm({ ...versionForm, currency: e.target.value as any })}
+                    >
+                      <option value="USD">USD ($)</option>
+                      <option value="ETB">ETB (Birr)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label required>Revisions Allowed</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={10}
+                      value={versionForm.revisionsAllowed}
+                      onChange={(e) => setVersionForm({ ...versionForm, revisionsAllowed: Number(e.target.value) })}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <Label required>Target Deadline</Label>
+                    <Input
+                      type="date"
+                      value={versionForm.deadline}
+                      onChange={(e) => setVersionForm({ ...versionForm, deadline: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label required>Assigned Production Lead</Label>
+                  <select
+                    className="flex h-11 w-full rounded-xl border border-[#E5E5EA] dark:border-[#33302C] bg-white dark:bg-[#161412] px-4 py-2 text-sm text-[#181818] dark:text-[#F5F3EC]"
+                    value={versionForm.assignedEditor}
+                    onChange={(e) => setVersionForm({ ...versionForm, assignedEditor: e.target.value as any })}
+                  >
+                    <option value="amir">Amir &bull; Senior Lead Editor</option>
+                    <option value="aymen">Aymen &bull; Creative Director</option>
+                  </select>
+                </div>
+
+                <div>
+                  <Label>Negotiation Notes / Changelog</Label>
+                  <textarea
+                    rows={3}
+                    className="flex w-full rounded-xl border border-[#E5E5EA] dark:border-[#33302C] bg-white dark:bg-[#161412] px-4 py-2.5 text-sm text-[#181818] dark:text-[#F5F3EC] focus:outline-none focus:ring-1 focus:ring-brand-brown dark:focus:ring-brand-terracotta"
+                    placeholder="e.g. Adjusted price to 4,500 ETB and added 1 extra revision as requested by client."
+                    value={versionForm.notes}
+                    onChange={(e) => setVersionForm({ ...versionForm, notes: e.target.value })}
+                  />
+                </div>
+
+                <Button type="submit" className="w-full">
+                  Dispatch Revised Version (v{versionModalProposal.currentVersion + 1})
+                </Button>
               </form>
             </DialogContent>
           </Dialog>
