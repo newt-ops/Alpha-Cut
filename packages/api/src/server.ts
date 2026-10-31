@@ -21,7 +21,6 @@ const allowedOrigins = [
   "https://alpha-cut.com",
   "https://www.alpha-cut.com",
   "https://api.alpha-cut.com",
-  "https://alpha-cut-nine.vercel.app",
   "http://localhost:5173",
   "http://localhost:5174",
   "http://127.0.0.1:5173",

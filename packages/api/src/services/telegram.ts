@@ -49,6 +49,7 @@ export function verifyTelegramInitData(initData: string, tokenOverride?: string)
 export async function sendTelegramMessage(params: {
   chatId: string | number;
   text: string;
+  parseMode?: "HTML" | "Markdown" | "MarkdownV2";
   replyMarkup?: any;
 }): Promise<boolean> {
   if (!BOT_TOKEN) {
@@ -64,12 +65,15 @@ export async function sendTelegramMessage(params: {
       body: JSON.stringify({
         chat_id: params.chatId,
         text: params.text,
-        parse_mode: "Markdown",
+        parse_mode: params.parseMode || "HTML",
         reply_markup: params.replyMarkup,
       }),
     });
 
     const data = await response.json();
+    if (!data.ok) {
+      console.error("[Telegram API Error]:", data.description, "Payload text was:", params.text);
+    }
     return data.ok;
   } catch (error) {
     console.error("[Telegram API Error] Failed to send message:", error);
@@ -80,11 +84,12 @@ export async function sendTelegramMessage(params: {
 /**
  * Dispatches an instant alert to Amir & Aymen
  */
-export async function notifyAdmins(text: string, replyMarkup?: any): Promise<void> {
+export async function notifyAdmins(text: string, replyMarkup?: any, parseMode?: "HTML" | "Markdown" | "MarkdownV2"): Promise<void> {
   if (ADMIN_CHAT_ID) {
     await sendTelegramMessage({
       chatId: ADMIN_CHAT_ID,
       text,
+      parseMode: parseMode || "Markdown",
       replyMarkup,
     });
   } else {
