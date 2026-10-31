@@ -2,10 +2,10 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  base: "/miniapp/",
+  base: "/",
   plugins: [react()],
   build: {
-    outDir: "../web/dist/miniapp",
+    outDir: "dist",
     emptyOutDir: true,
   },
   server: {
@@ -18,4 +18,3 @@ export default defineConfig({
     },
   },
 });
-

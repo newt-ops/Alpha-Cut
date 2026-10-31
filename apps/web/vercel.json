@@ -1,16 +1,40 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "redirects": [
+    {
+      "source": "/miniapp",
+      "destination": "https://app.alpha-cut.com/",
+      "permanent": true
+    },
+    {
+      "source": "/miniapp/:path*",
+      "destination": "https://app.alpha-cut.com/:path*",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/:match*",
       "destination": "https://api.alpha-cut.com/api/:match*"
     },
     {
-      "source": "/miniapp",
-      "destination": "/miniapp/index.html"
+      "source": "/assets/:match*",
+      "has": [
+        {
+          "type": "host",
+          "value": "app.alpha-cut.com"
+        }
+      ],
+      "destination": "/miniapp/assets/:match*"
     },
     {
-      "source": "/miniapp/",
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "app.alpha-cut.com"
+        }
+      ],
       "destination": "/miniapp/index.html"
     },
     {
@@ -19,4 +43,3 @@
     }
   ]
 }
-

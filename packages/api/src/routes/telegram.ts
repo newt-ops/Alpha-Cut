@@ -6,7 +6,7 @@ import { EDITING_STYLES } from "@alpha-cut/types";
 const router = Router();
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
 const CLIENT_URL = process.env.CLIENT_URL || "https://alpha-cut.com";
-const MINIAPP_URL = `${CLIENT_URL}/miniapp`;
+const MINIAPP_URL = process.env.MINIAPP_URL || "https://app.alpha-cut.com";
 
 router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
   try {

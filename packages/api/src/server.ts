@@ -20,6 +20,7 @@ const allowedOrigins = [
   CLIENT_URL,
   "https://alpha-cut.com",
   "https://www.alpha-cut.com",
+  "https://app.alpha-cut.com",
   "https://api.alpha-cut.com",
   "http://localhost:5173",
   "http://localhost:5174",
@@ -33,7 +34,7 @@ app.use(
   cors({
     origin: (origin, callback) => {
       // Allow requests with no origin (like mobile apps, curl, or Postman)
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (!origin || allowedOrigins.includes(origin) || origin.endsWith(".alpha-cut.com")) {
         callback(null, true);
       } else {
         callback(null, true); // Allow during development
