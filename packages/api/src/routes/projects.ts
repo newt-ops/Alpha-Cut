@@ -7,6 +7,17 @@ import { notifyAdmins } from "../services/telegram.js";
 
 const router = Router();
 
+function isOwnerOrAdmin(project: any, user: any): boolean {
+  if (user.role === "super_admin") return true;
+  if (project.clientId === user.userId) return true;
+  if (user.telegramId && (project.clientTelegram === user.telegramId || project.clientTelegram === `@${user.telegramId}`)) return true;
+  if (user.email?.includes("@t.me")) {
+    const handle = user.email.replace("@t.me", "");
+    if (project.clientTelegram === handle || project.clientTelegram === `@${handle}`) return true;
+  }
+  return false;
+}
+
 // GET /api/projects/public/featured-reviews (Public for website social proof)
 router.get("/public/featured-reviews", async (_req: Request, res: Response): Promise<void> => {
   try {
@@ -30,7 +41,18 @@ router.get("/", requireAuth, async (req: Request, res: Response): Promise<void> 
     const projects = getProjectsCollection();
 
     // Super Admin gets all projects; Clients only get their own
-    const filter = user.role === "super_admin" ? {} : { clientId: user.userId };
+    let filter: any = {};
+    if (user.role !== "super_admin") {
+      const orConditions: any[] = [{ clientId: user.userId }];
+      if (user.telegramId) {
+        orConditions.push({ clientTelegram: user.telegramId }, { clientTelegram: `@${user.telegramId}` });
+      }
+      if (user.email?.includes("@t.me")) {
+        const handle = user.email.replace("@t.me", "");
+        orConditions.push({ clientTelegram: handle }, { clientTelegram: `@${handle}` });
+      }
+      filter = { $or: orConditions };
+    }
     const list = await projects.find(filter).sort({ createdAt: -1 }).toArray();
 
     res.json({ projects: list });
@@ -55,7 +77,7 @@ router.get("/:id", requireAuth, async (req: Request, res: Response): Promise<voi
     }
 
     // Role check: non-admin can only access own project
-    if (user.role !== "super_admin" && project.clientId !== user.userId) {
+    if (!isOwnerOrAdmin(project, user)) {
       res.status(403).json({ error: "Access denied" });
       return;
     }
@@ -72,6 +94,7 @@ router.post("/", requireAuth, async (req: Request, res: Response): Promise<void>
   try {
     const user = req.user!;
     const defaultDeadline = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const telegramUsername = req.body.clientTelegram || (user.email?.includes("@t.me") ? user.email.replace("@t.me", "") : user.telegramId);
     const parseResult = ProjectSchema.omit({ _id: true }).safeParse({
       price: 0,
       revisionsAllowed: 2,
@@ -80,6 +103,7 @@ router.post("/", requireAuth, async (req: Request, res: Response): Promise<void>
       clientId: user.userId,
       clientName: user.name,
       clientEmail: user.email,
+      clientTelegram: telegramUsername || req.body.clientTelegram,
     });
 
     if (!parseResult.success) {
@@ -161,7 +185,7 @@ router.post("/:id/accept-proposal", requireAuth, async (req: Request, res: Respo
       return;
     }
 
-    if (user.role !== "super_admin" && project.clientId !== user.userId) {
+    if (!isOwnerOrAdmin(project, user)) {
       res.status(403).json({ error: "Access denied" });
       return;
     }
@@ -245,7 +269,7 @@ const handleRevisionRequest = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    if (user.role !== "super_admin" && project.clientId !== user.userId) {
+    if (!isOwnerOrAdmin(project, user)) {
       res.status(403).json({ error: "Access denied" });
       return;
     }
@@ -300,7 +324,7 @@ router.post("/:id/approve", requireAuth, async (req: Request, res: Response): Pr
       return;
     }
 
-    if (user.role !== "super_admin" && project.clientId !== user.userId) {
+    if (!isOwnerOrAdmin(project, user)) {
       res.status(403).json({ error: "Access denied" });
       return;
     }
@@ -353,7 +377,7 @@ router.post("/:id/review", requireAuth, async (req: Request, res: Response): Pro
       return;
     }
 
-    if (user.role !== "super_admin" && project.clientId !== user.userId) {
+    if (!isOwnerOrAdmin(project, user)) {
       res.status(403).json({ error: "Access denied" });
       return;
     }

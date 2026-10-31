@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   PlayIcon,
   CheckmarkCircle02Icon,
@@ -6,15 +6,28 @@ import {
   SparklesIcon,
   StarIcon,
   ArrowRight01Icon,
+  ArrowLeft01Icon,
   File01Icon,
   PlusSignIcon,
+  UserIcon,
+  Layers01Icon,
+  Cancel01Icon,
 } from "hugeicons-react";
-import type { Project, VideoFormat, EditingStyle, PackageTier } from "@alpha-cut/types";
+import {
+  EDITING_STYLES,
+  type Project,
+  type VideoFormat,
+  type EditingStyle,
+  type PackageTier,
+} from "@alpha-cut/types";
+
+type MiniAppTab = "projects" | "new_brief" | "styles" | "team";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"projects" | "new_brief">("projects");
+  const [activeTab, setActiveTab] = useState<MiniAppTab>("projects");
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Selected project for deep inspection / actions
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -34,29 +47,9 @@ export default function App() {
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewText, setReviewText] = useState("");
   const [showReviewModal, setShowReviewModal] = useState(false);
+  const [actionInProgress, setActionInProgress] = useState(false);
 
-  // Initialize Telegram WebApp
-  useEffect(() => {
-    const tg = window.Telegram?.WebApp;
-    if (tg) {
-      tg.ready();
-      tg.expand();
-
-      // Configure BackButton behavior
-      if (selectedProject) {
-        tg.BackButton.show();
-        tg.BackButton.onClick(() => {
-          setSelectedProject(null);
-          setShowRevisionModal(false);
-          setShowReviewModal(false);
-          tg.BackButton.hide();
-        });
-      } else {
-        tg.BackButton.hide();
-      }
-    }
-  }, [selectedProject]);
-
+  // Helper for Telegram Haptic Feedback
   const haptic = (type: "light" | "medium" | "heavy" = "medium") => {
     if (window.Telegram?.WebApp?.HapticFeedback) {
       window.Telegram.WebApp.HapticFeedback.impactOccurred(type);
@@ -69,84 +62,154 @@ export default function App() {
     }
   };
 
-  const fetchProjects = async () => {
+  const hapticError = () => {
+    if (window.Telegram?.WebApp?.HapticFeedback) {
+      window.Telegram.WebApp.HapticFeedback.notificationOccurred("error");
+    }
+  };
+
+  // Authenticated API request helper carrying Telegram initData
+  const apiFetch = useCallback(async (url: string, options: RequestInit = {}) => {
+    const initData = window.Telegram?.WebApp?.initData || "";
+    const headers: Record<string, string> = {
+      ...(options.headers as Record<string, string> || {}),
+      "x-telegram-init-data": initData,
+    };
+    return fetch(url, { ...options, headers });
+  }, []);
+
+  // Fetch Projects belonging to this Telegram client
+  const fetchProjects = useCallback(async () => {
     try {
       setLoading(true);
-      const tgInitData = window.Telegram?.WebApp?.initData || "";
-      const res = await fetch("/api/projects", {
-        headers: {
-          "x-telegram-init-data": tgInitData,
-        },
-      });
+      setErrorMsg(null);
+      const res = await apiFetch("/api/projects");
 
       if (res.ok) {
         const data = await res.json();
-        const list = data.projects || [];
+        const list: Project[] = data.projects || [];
         setProjects(list);
 
         // Check URL params for deep-linking
         const params = new URLSearchParams(window.location.search);
         const proposalId = params.get("proposal");
         const projectId = params.get("project");
+        const tabParam = params.get("tab") as MiniAppTab | null;
 
         if (proposalId) {
-          const match = list.find((p: Project) => p._id === proposalId);
+          const match = list.find((p) => p._id === proposalId);
           if (match) setSelectedProject(match);
         } else if (projectId) {
-          const match = list.find((p: Project) => p._id === projectId);
+          const match = list.find((p) => p._id === projectId);
           if (match) setSelectedProject(match);
         }
+
+        if (tabParam && ["projects", "new_brief", "styles", "team"].includes(tabParam)) {
+          setActiveTab(tabParam);
+        }
+      } else if (res.status === 401) {
+        // Outside Telegram environment or invalid initData
+        setErrorMsg("Please open this app inside Telegram via @alpha_cut_bot to access your projects.");
+      } else {
+        setErrorMsg("Unable to retrieve projects. Please try again shortly.");
       }
     } catch (err) {
       console.error("[MiniApp fetch error]:", err);
+      setErrorMsg("Network error contacting Alpha Cut servers.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [apiFetch]);
 
+  // Telegram WebApp Initialization and BackButton binding
+  useEffect(() => {
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+
+      // Configure BackButton
+      if (selectedProject || showRevisionModal || showReviewModal) {
+        tg.BackButton.show();
+        const handleBack = () => {
+          if (showRevisionModal) {
+            setShowRevisionModal(false);
+          } else if (showReviewModal) {
+            setShowReviewModal(false);
+          } else {
+            setSelectedProject(null);
+          }
+        };
+        tg.BackButton.onClick(handleBack);
+        return () => {
+          tg.BackButton.offClick(handleBack);
+        };
+      } else {
+        tg.BackButton.hide();
+      }
+    }
+  }, [selectedProject, showRevisionModal, showReviewModal]);
+
+  // Initial load
   useEffect(() => {
     fetchProjects();
-  }, []);
+  }, [fetchProjects]);
 
+  // Accept Scope Proposal
   const handleAcceptProposal = async (projectId: string) => {
     haptic("heavy");
+    setActionInProgress(true);
     try {
-      const res = await fetch(`/api/projects/${projectId}/accept-proposal`, {
+      const res = await apiFetch(`/api/projects/${projectId}/accept-proposal`, {
         method: "POST",
       });
       if (res.ok) {
         hapticSuccess();
-        fetchProjects();
+        await fetchProjects();
         if (selectedProject?._id === projectId) {
           setSelectedProject((prev) => (prev ? { ...prev, stage: "in_progress" } : null));
         }
+      } else {
+        hapticError();
       }
     } catch (err) {
       console.error(err);
+      hapticError();
+    } finally {
+      setActionInProgress(false);
     }
   };
 
+  // Approve Final Cut
   const handleApproveCut = async (projectId: string) => {
     haptic("heavy");
+    setActionInProgress(true);
     try {
-      const res = await fetch(`/api/projects/${projectId}/approve`, {
+      const res = await apiFetch(`/api/projects/${projectId}/approve`, {
         method: "POST",
       });
       if (res.ok) {
         hapticSuccess();
         setShowReviewModal(true);
-        fetchProjects();
+        await fetchProjects();
+      } else {
+        hapticError();
       }
     } catch (err) {
       console.error(err);
+      hapticError();
+    } finally {
+      setActionInProgress(false);
     }
   };
 
+  // Submit Revision Notes
   const handleSubmitRevision = async () => {
     if (!selectedProject || !revisionText.trim()) return;
     haptic("medium");
+    setActionInProgress(true);
     try {
-      const res = await fetch(`/api/projects/${selectedProject._id}/request-revision`, {
+      const res = await apiFetch(`/api/projects/${selectedProject._id}/request-revision`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ feedback: revisionText }),
@@ -155,18 +218,30 @@ export default function App() {
         hapticSuccess();
         setShowRevisionModal(false);
         setRevisionText("");
-        fetchProjects();
+        await fetchProjects();
+        if (selectedProject?._id) {
+          setSelectedProject((prev) =>
+            prev ? { ...prev, stage: "revision_requested", revisionFeedback: revisionText } : null
+          );
+        }
+      } else {
+        hapticError();
       }
     } catch (err) {
       console.error(err);
+      hapticError();
+    } finally {
+      setActionInProgress(false);
     }
   };
 
+  // Submit Review Testimonial
   const handleSubmitReview = async () => {
     if (!selectedProject) return;
     haptic("medium");
+    setActionInProgress(true);
     try {
-      const res = await fetch(`/api/projects/${selectedProject._id}/review`, {
+      const res = await apiFetch(`/api/projects/${selectedProject._id}/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rating: reviewRating, testimonial: reviewText }),
@@ -175,67 +250,119 @@ export default function App() {
         hapticSuccess();
         setShowReviewModal(false);
         setSelectedProject(null);
-        fetchProjects();
+        await fetchProjects();
+      } else {
+        hapticError();
       }
     } catch (err) {
       console.error(err);
+      hapticError();
+    } finally {
+      setActionInProgress(false);
     }
   };
 
+  // Create New Video Brief
   const handleCreateBrief = async (e: React.FormEvent) => {
     e.preventDefault();
     haptic("heavy");
+    setActionInProgress(true);
     try {
       const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
       const payload = {
         ...newBrief,
         deadline: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
-        clientTelegram: tgUser?.username || "",
+        clientTelegram: tgUser?.username || (tgUser?.id ? String(tgUser.id) : ""),
         price: 0,
         currency: "USD",
         revisionsAllowed: 2,
       };
 
-      const res = await fetch("/api/projects", {
+      const res = await apiFetch("/api/projects", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-telegram-init-data": window.Telegram?.WebApp?.initData || "",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
       if (res.ok) {
         hapticSuccess();
+        setNewBrief({
+          title: "",
+          format: "short_form",
+          style: "hook_talking_head",
+          tier: "professional",
+          footageUrl: "",
+          notes: "",
+        });
         setActiveTab("projects");
-        fetchProjects();
+        await fetchProjects();
+      } else {
+        hapticError();
       }
     } catch (err) {
       console.error(err);
+      hapticError();
+    } finally {
+      setActionInProgress(false);
     }
   };
 
+  // Open link in Telegram-friendly manner
+  const openExternal = (url: string) => {
+    haptic("light");
+    if (window.Telegram?.WebApp?.openLink) {
+      window.Telegram.WebApp.openLink(url);
+    } else {
+      window.open(url, "_blank");
+    }
+  };
+
+  // Select style from catalog and transition into brief creation
+  const handleSelectStyleForBrief = (styleKey: EditingStyle) => {
+    haptic("light");
+    setNewBrief((prev) => ({ ...prev, style: styleKey }));
+    setActiveTab("new_brief");
+  };
+
+  const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
+
   return (
-    <div className="min-h-screen bg-tg-bg text-tg-text pb-12 transition-colors">
-      {/* Top Telegram Header Bar */}
-      <header className="px-4 py-3 bg-tg-secondaryBg border-b border-black/5 dark:border-white/5 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="h-7 w-7 rounded-lg bg-tg-button text-tg-buttonText flex items-center justify-center font-bold text-xs">
-            A
+    <div className="min-h-screen bg-tg-bg text-tg-text pb-20 select-none font-sans transition-colors">
+      {/* Header Bar */}
+      <header className="sticky top-0 z-40 px-4 py-3 bg-tg-secondaryBg border-b border-black/10 dark:border-white/10 flex items-center justify-between backdrop-blur-md">
+        <div className="flex items-center gap-2.5">
+          <div className="h-7 w-7 rounded-lg bg-tg-button text-tg-buttonText flex items-center justify-center font-bold text-xs tracking-wider">
+            AC
           </div>
-          <span className="font-bold text-sm tracking-tight text-tg-text">Alpha Cut Portal</span>
+          <div>
+            <h1 className="font-bold text-sm tracking-tight text-tg-text leading-tight">
+              Alpha Cut
+            </h1>
+            <p className="text-[10px] text-tg-hint uppercase tracking-wider font-semibold">
+              Client Portal
+            </p>
+          </div>
         </div>
-        <span className="text-[11px] font-semibold text-tg-hint">
-          {window.Telegram?.WebApp?.initDataUnsafe?.user?.first_name || "Client"}
-        </span>
+
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-tg-bg border border-black/5 dark:border-white/5 text-[11px] font-medium text-tg-hint">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          <span>{tgUser?.first_name || "Client"}</span>
+        </div>
       </header>
 
       {/* Main Container */}
       <main className="p-4 max-w-lg mx-auto">
+        {/* Error notification banner */}
+        {errorMsg && (
+          <div className="mb-4 p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-300 space-y-1">
+            <p className="font-semibold">{errorMsg}</p>
+          </div>
+        )}
+
+        {/* 1. PROJECT DETAIL VIEW */}
         {selectedProject ? (
-          /* PROJECT DETAIL VIEW */
           <div className="space-y-4">
-            <div className="p-4 rounded-2xl bg-tg-secondaryBg border border-black/5 dark:border-white/5 space-y-3">
+            <div className="p-4 rounded-2xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 space-y-3.5">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-tg-hint">
                   {selectedProject.format === "short_form" ? "9:16 Short-Form" : "16:9 Long-Form"} &bull; {selectedProject.tier}
@@ -244,71 +371,97 @@ export default function App() {
                   {selectedProject.stage.replace("_", " ")}
                 </span>
               </div>
-              <h2 className="text-lg font-bold text-tg-text">{selectedProject.title}</h2>
-              <p className="text-xs text-tg-hint">
-                Style: {selectedProject.style.replace("_", " ")}
-              </p>
 
-              {/* Proposal Action Card */}
+              <div>
+                <h2 className="text-base font-bold text-tg-text leading-snug">
+                  {selectedProject.title}
+                </h2>
+                <p className="text-xs text-tg-hint mt-0.5">
+                  Style: {EDITING_STYLES[selectedProject.style]?.label || selectedProject.style.replace("_", " ")}
+                </p>
+              </div>
+
+              {/* Stage: Inquiry Pending */}
+              {selectedProject.stage === "inquiry_pending" && (
+                <div className="p-3.5 rounded-xl bg-tg-bg border border-black/10 dark:border-white/10 space-y-1.5 text-xs">
+                  <div className="flex items-center gap-1.5 font-bold text-tg-text">
+                    <Clock01Icon className="h-4 w-4 text-tg-button" />
+                    <span>Inquiry Under Creative Review</span>
+                  </div>
+                  <p className="text-tg-hint">
+                    Amir & Aymen are reviewing your footage link and creative notes. You will receive an exact scope quote shortly.
+                  </p>
+                </div>
+              )}
+
+              {/* Stage: Proposal Sent */}
               {selectedProject.stage === "proposal_sent" && (
-                <div className="p-4 rounded-xl bg-tg-bg border border-black/10 dark:border-white/10 space-y-3 mt-2">
+                <div className="p-4 rounded-xl bg-tg-bg border border-black/10 dark:border-white/10 space-y-3">
                   <div className="flex justify-between items-center text-sm font-bold">
                     <span>Quoted Investment:</span>
-                    <span className="text-tg-button">{selectedProject.price} {selectedProject.currency}</span>
+                    <span className="text-tg-button text-base">
+                      {selectedProject.price} {selectedProject.currency}
+                    </span>
                   </div>
-                  <div className="text-[11px] text-tg-hint flex justify-between">
-                    <span>Included Revisions: {selectedProject.revisionsAllowed} rounds</span>
+                  <div className="text-[11px] text-tg-hint flex justify-between border-t border-black/5 dark:border-white/5 pt-2">
+                    <span>Revisions: {selectedProject.revisionsAllowed} rounds</span>
                     <span>Due: {new Date(selectedProject.deadline).toLocaleDateString()}</span>
                   </div>
                   <button
-                    className="w-full py-3 px-4 rounded-xl font-bold bg-tg-button text-tg-buttonText text-sm shadow active:opacity-90 transition-opacity"
+                    disabled={actionInProgress}
+                    className="w-full py-3 px-4 rounded-xl font-bold bg-tg-button text-tg-buttonText text-xs shadow-sm active:opacity-90 transition-opacity flex items-center justify-center gap-1.5 disabled:opacity-50"
                     onClick={() => selectedProject._id && handleAcceptProposal(selectedProject._id)}
                   >
-                    Accept Proposal ⚡
+                    <CheckmarkCircle02Icon className="h-4 w-4" />
+                    <span>Accept Proposal</span>
                   </button>
                 </div>
               )}
 
-              {/* In Production Card */}
+              {/* Stage: In Production */}
               {selectedProject.stage === "in_progress" && (
                 <div className="p-3.5 rounded-xl bg-tg-bg border border-black/10 dark:border-white/10 flex items-center justify-between text-xs">
                   <div>
-                    <p className="font-bold text-tg-text">Editor Cutting Footage</p>
+                    <p className="font-bold text-tg-text">Footage on Timeline</p>
                     <p className="text-tg-hint mt-0.5">
-                      Editor: {selectedProject.assignedEditor.toUpperCase()}
+                      Assigned Lead: {selectedProject.assignedEditor.toUpperCase()}
+                    </p>
+                    <p className="text-[10px] text-tg-hint mt-1">
+                      Target Cut: {new Date(selectedProject.deadline).toLocaleDateString()}
                     </p>
                   </div>
-                  <Clock01Icon className="h-5 w-5 text-tg-button" />
+                  <Clock01Icon className="h-6 w-6 text-tg-button" />
                 </div>
               )}
 
-              {/* Cut Review Card */}
+              {/* Stage: Cut Delivered for Review */}
               {selectedProject.stage === "in_review" && (
                 <div className="p-4 rounded-xl bg-tg-button/10 border border-tg-button/20 space-y-3">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-tg-button">
                     <CheckmarkCircle02Icon className="h-4 w-4" />
-                    <span>Cut Delivered for Review!</span>
+                    <span>Initial Cut Delivered for Review</span>
                   </div>
+
                   {selectedProject.deliverableUrl && (
-                    <a
-                      href={selectedProject.deliverableUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block text-center py-2.5 px-4 rounded-xl bg-tg-button text-tg-buttonText font-bold text-xs"
-                      onClick={() => haptic("light")}
+                    <button
+                      className="w-full py-2.5 px-4 rounded-xl bg-tg-button text-tg-buttonText font-bold text-xs active:opacity-90 transition-opacity"
+                      onClick={() => openExternal(selectedProject.deliverableUrl!)}
                     >
                       Watch Cut in Frame.io / Drive
-                    </a>
+                    </button>
                   )}
+
                   <div className="grid grid-cols-2 gap-2 pt-1">
                     <button
-                      className="py-2.5 px-3 rounded-xl bg-emerald-600 text-white font-bold text-xs active:opacity-90"
+                      disabled={actionInProgress}
+                      className="py-2.5 px-3 rounded-xl bg-emerald-600 text-white font-bold text-xs active:opacity-90 disabled:opacity-50"
                       onClick={() => selectedProject._id && handleApproveCut(selectedProject._id)}
                     >
                       Approve Cut
                     </button>
                     <button
-                      className="py-2.5 px-3 rounded-xl bg-tg-secondaryBg text-tg-text font-bold text-xs active:opacity-90 border border-black/10 dark:border-white/10"
+                      disabled={actionInProgress}
+                      className="py-2.5 px-3 rounded-xl bg-tg-secondaryBg text-tg-text font-bold text-xs active:opacity-90 border border-black/10 dark:border-white/10 disabled:opacity-50"
                       onClick={() => {
                         haptic("light");
                         setShowRevisionModal(true);
@@ -320,46 +473,152 @@ export default function App() {
                 </div>
               )}
 
-              {/* Revision Progress Card */}
+              {/* Stage: Revision Requested */}
               {selectedProject.stage === "revision_requested" && (
-                <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs">
+                <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs space-y-1.5">
                   <p className="font-bold text-amber-600 dark:text-amber-400">
                     Revision Round {selectedProject.revisionsUsed} of {selectedProject.revisionsAllowed} In Progress
                   </p>
-                  <p className="text-tg-hint mt-1 italic">"{selectedProject.revisionFeedback}"</p>
+                  {selectedProject.revisionFeedback && (
+                    <p className="text-tg-hint italic">
+                      "{selectedProject.revisionFeedback}"
+                    </p>
+                  )}
                 </div>
               )}
 
-              {/* Completed Card */}
+              {/* Stage: Approved */}
               {selectedProject.stage === "approved" && (
                 <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between text-xs">
                   <div>
-                    <p className="font-bold text-emerald-600 dark:text-emerald-400">Final Cut Approved</p>
-                    <p className="text-tg-hint">Delivered & verified.</p>
+                    <p className="font-bold text-emerald-600 dark:text-emerald-400">
+                      Final Cut Approved
+                    </p>
+                    <p className="text-tg-hint">Master render delivered & archived.</p>
                   </div>
                   <CheckmarkCircle02Icon className="h-6 w-6 text-emerald-500" />
+                </div>
+              )}
+
+              {/* Raw Footage Reference */}
+              {selectedProject.footageUrl && (
+                <div className="pt-2 border-t border-black/5 dark:border-white/5 text-[11px] flex items-center justify-between text-tg-hint">
+                  <span className="truncate max-w-[200px]">Footage: {selectedProject.footageUrl}</span>
+                  <button
+                    className="text-tg-button font-semibold"
+                    onClick={() => openExternal(selectedProject.footageUrl!)}
+                  >
+                    Open Link
+                  </button>
                 </div>
               )}
             </div>
 
             <button
-              className="w-full py-2.5 rounded-xl text-xs font-semibold text-tg-hint bg-tg-secondaryBg border border-black/5 dark:border-white/5"
-              onClick={() => setSelectedProject(null)}
+              className="w-full py-2.5 rounded-xl text-xs font-semibold text-tg-hint bg-tg-secondaryBg border border-black/10 dark:border-white/10 flex items-center justify-center gap-1.5"
+              onClick={() => {
+                haptic("light");
+                setSelectedProject(null);
+              }}
             >
-              &larr; Back to Active Edits
+              <ArrowLeft01Icon className="h-3.5 w-3.5" />
+              <span>Back to Active Edits</span>
             </button>
           </div>
+        ) : activeTab === "projects" ? (
+          /* 2. ACTIVE PROJECTS TAB */
+          <div className="space-y-3">
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="text-sm font-bold text-tg-text">Active Pipeline</h2>
+              <button
+                className="text-xs font-semibold text-tg-button flex items-center gap-1"
+                onClick={() => {
+                  haptic("light");
+                  setActiveTab("new_brief");
+                }}
+              >
+                <PlusSignIcon className="h-3.5 w-3.5" />
+                <span>New Brief</span>
+              </button>
+            </div>
+
+            {loading ? (
+              <div className="p-12 text-center text-xs text-tg-hint space-y-2">
+                <Clock01Icon className="h-6 w-6 text-tg-button animate-spin mx-auto" />
+                <p>Loading projects...</p>
+              </div>
+            ) : projects.length === 0 ? (
+              <div className="p-8 text-center bg-tg-secondaryBg rounded-2xl border border-black/10 dark:border-white/10 space-y-3">
+                <SparklesIcon className="h-8 w-8 text-tg-button mx-auto" />
+                <h3 className="text-sm font-bold text-tg-text">No active cuts in queue</h3>
+                <p className="text-xs text-tg-hint max-w-xs mx-auto">
+                  Submit raw footage with your creative brief to receive a customized scope quote within hours.
+                </p>
+                <button
+                  className="py-2.5 px-4 rounded-xl font-bold bg-tg-button text-tg-buttonText text-xs shadow-sm active:opacity-90"
+                  onClick={() => {
+                    haptic("light");
+                    setActiveTab("new_brief");
+                  }}
+                >
+                  Start First Project
+                </button>
+              </div>
+            ) : (
+              projects.map((proj) => (
+                <div
+                  key={proj._id}
+                  className="p-3.5 rounded-xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 active:scale-[0.99] transition-transform cursor-pointer space-y-2"
+                  onClick={() => {
+                    haptic("light");
+                    setSelectedProject(proj);
+                  }}
+                >
+                  <div className="flex justify-between items-start gap-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-tg-hint">
+                      {proj.format === "short_form" ? "9:16 Short" : "16:9 Long"} &bull; {proj.tier}
+                    </span>
+                    <span className="text-[9px] font-bold uppercase px-2 py-0.5 rounded bg-tg-button/10 text-tg-button">
+                      {proj.stage.replace("_", " ")}
+                    </span>
+                  </div>
+
+                  <h4 className="text-sm font-bold text-tg-text leading-snug">
+                    {proj.title}
+                  </h4>
+
+                  <div className="flex items-center justify-between text-[11px] text-tg-hint pt-1 border-t border-black/5 dark:border-white/5">
+                    <span>
+                      {proj.stage === "proposal_sent" && `Quote: ${proj.price} ${proj.currency}`}
+                      {proj.stage === "in_progress" && `Lead: ${proj.assignedEditor.toUpperCase()}`}
+                      {proj.stage === "in_review" && "Cut Ready for Review"}
+                      {proj.stage === "revision_requested" && `Round ${proj.revisionsUsed} of ${proj.revisionsAllowed}`}
+                      {proj.stage === "approved" && "Final Approved"}
+                      {proj.stage === "inquiry_pending" && "Brief in Review"}
+                    </span>
+                    <ArrowRight01Icon className="h-3.5 w-3.5 text-tg-hint" />
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         ) : activeTab === "new_brief" ? (
-          /* SUBMIT NEW BRIEF TAB */
+          /* 3. SUBMIT BRIEF TAB */
           <div className="space-y-4">
-            <div className="p-4 rounded-2xl bg-tg-secondaryBg border border-black/5 dark:border-white/5 space-y-4">
-              <h2 className="text-base font-bold text-tg-text">Submit a Video Brief</h2>
-              <form onSubmit={handleCreateBrief} className="space-y-3 text-xs">
+            <div className="p-4 rounded-2xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 space-y-4">
+              <div>
+                <h2 className="text-base font-bold text-tg-text">Submit Creative Brief</h2>
+                <p className="text-xs text-tg-hint mt-0.5">
+                  Direct submission to Amir & Aymen. No middlemen, no account password required.
+                </p>
+              </div>
+
+              <form onSubmit={handleCreateBrief} className="space-y-3.5 text-xs">
                 <div>
                   <label className="font-semibold text-tg-text block mb-1">Project Title</label>
                   <input
                     type="text"
-                    placeholder="e.g. 3x TikTok Listicle Batch"
+                    placeholder="e.g. 3x TikTok Hook Batch or SaaS Promo"
                     className="w-full h-10 px-3 rounded-xl bg-tg-bg border border-black/10 dark:border-white/10 text-tg-text text-xs focus:outline-none focus:ring-1 focus:ring-tg-button"
                     value={newBrief.title}
                     onChange={(e) => setNewBrief({ ...newBrief, title: e.target.value })}
@@ -368,7 +627,7 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="font-semibold text-tg-text block mb-1">Format</label>
+                  <label className="font-semibold text-tg-text block mb-1">Target Format</label>
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
@@ -402,10 +661,48 @@ export default function App() {
                 </div>
 
                 <div>
+                  <label className="font-semibold text-tg-text block mb-1">Signature Style</label>
+                  <select
+                    className="w-full h-10 px-3 rounded-xl bg-tg-bg border border-black/10 dark:border-white/10 text-tg-text text-xs focus:outline-none focus:ring-1 focus:ring-tg-button"
+                    value={newBrief.style}
+                    onChange={(e) => setNewBrief({ ...newBrief, style: e.target.value as EditingStyle })}
+                  >
+                    {Object.entries(EDITING_STYLES).map(([k, meta]) => (
+                      <option key={k} value={k}>
+                        {meta.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="font-semibold text-tg-text block mb-1">Package Tier</label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(["basic", "professional", "premium"] as PackageTier[]).map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        className={`py-2 px-2 rounded-xl border text-xs font-semibold capitalize ${
+                          newBrief.tier === t
+                            ? "border-tg-button bg-tg-button/10 text-tg-button"
+                            : "border-black/10 dark:border-white/10 bg-tg-bg text-tg-text"
+                        }`}
+                        onClick={() => {
+                          haptic("light");
+                          setNewBrief({ ...newBrief, tier: t });
+                        }}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
                   <label className="font-semibold text-tg-text block mb-1">Raw Footage Link</label>
                   <input
                     type="url"
-                    placeholder="https://drive.google.com/..."
+                    placeholder="https://drive.google.com/... or Dropbox"
                     className="w-full h-10 px-3 rounded-xl bg-tg-bg border border-black/10 dark:border-white/10 text-tg-text text-xs focus:outline-none focus:ring-1 focus:ring-tg-button"
                     value={newBrief.footageUrl}
                     onChange={(e) => setNewBrief({ ...newBrief, footageUrl: e.target.value })}
@@ -414,10 +711,10 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="font-semibold text-tg-text block mb-1">Creative Brief Notes</label>
+                  <label className="font-semibold text-tg-text block mb-1">Creative Notes & References</label>
                   <textarea
                     rows={3}
-                    placeholder="Pacing notes, specific hooks, references..."
+                    placeholder="Pacing notes, specific hooks, reference video links..."
                     className="w-full p-3 rounded-xl bg-tg-bg border border-black/10 dark:border-white/10 text-tg-text text-xs focus:outline-none focus:ring-1 focus:ring-tg-button"
                     value={newBrief.notes}
                     onChange={(e) => setNewBrief({ ...newBrief, notes: e.target.value })}
@@ -427,96 +724,189 @@ export default function App() {
 
                 <button
                   type="submit"
-                  className="w-full py-3 px-4 rounded-xl font-bold bg-tg-button text-tg-buttonText text-xs shadow active:opacity-90 transition-opacity mt-2"
+                  disabled={actionInProgress}
+                  className="w-full py-3 px-4 rounded-xl font-bold bg-tg-button text-tg-buttonText text-xs shadow-sm active:opacity-90 transition-opacity mt-2 flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
-                  Submit Brief to Amir & Aymen
+                  <CheckmarkCircle02Icon className="h-4 w-4" />
+                  <span>Submit Brief to Amir & Aymen</span>
                 </button>
               </form>
             </div>
           </div>
-        ) : (
-          /* ACTIVE PROJECTS LIST */
-          <div className="space-y-3">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-bold text-tg-text">Active Video Edits</h2>
-              <button
-                className="text-xs font-semibold text-tg-button flex items-center gap-1"
-                onClick={() => {
-                  haptic("light");
-                  setActiveTab("new_brief");
-                }}
-              >
-                <PlusSignIcon className="h-3.5 w-3.5" />
-                <span>New Brief</span>
-              </button>
+        ) : activeTab === "styles" ? (
+          /* 4. STYLES & PACKAGES CATALOG TAB */
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-sm font-bold text-tg-text">Signature Editing Styles</h2>
+              <p className="text-xs text-tg-hint">
+                Specialized aesthetics crafted to maximize audience retention.
+              </p>
             </div>
 
-            {loading ? (
-              <div className="p-8 text-center text-xs text-tg-hint">Loading cuts...</div>
-            ) : projects.length === 0 ? (
-              <div className="p-8 text-center bg-tg-secondaryBg rounded-2xl border border-black/5 dark:border-white/5 space-y-3">
-                <SparklesIcon className="h-8 w-8 text-tg-button mx-auto" />
-                <h3 className="text-sm font-bold text-tg-text">No active cuts</h3>
-                <p className="text-xs text-tg-hint max-w-xs mx-auto">
-                  Submit a brief to get an instant scope proposal from Amir & Aymen.
-                </p>
-                <button
-                  className="py-2.5 px-4 rounded-xl font-bold bg-tg-button text-tg-buttonText text-xs"
-                  onClick={() => {
-                    haptic("light");
-                    setActiveTab("new_brief");
-                  }}
-                >
-                  Start a Project
-                </button>
-              </div>
-            ) : (
-              projects.map((proj) => (
+            <div className="space-y-3">
+              {Object.entries(EDITING_STYLES).map(([k, item]) => (
                 <div
-                  key={proj._id}
-                  className="p-3.5 rounded-xl bg-tg-secondaryBg border border-black/5 dark:border-white/5 active:scale-[0.99] transition-transform cursor-pointer"
-                  onClick={() => {
-                    haptic("light");
-                    setSelectedProject(proj);
-                  }}
+                  key={k}
+                  className="p-3.5 rounded-xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 space-y-2"
                 >
-                  <div className="flex justify-between items-start gap-2 mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-tg-hint">
-                      {proj.format === "short_form" ? "9:16 Short" : "16:9 Long"}
-                    </span>
-                    <span className="text-[9px] font-bold uppercase px-2 py-0.5 rounded bg-tg-button/10 text-tg-button">
-                      {proj.stage.replace("_", " ")}
+                  <div className="flex justify-between items-start gap-2">
+                    <h3 className="text-xs font-bold text-tg-text">{item.label}</h3>
+                    <span className="text-[9px] font-semibold uppercase px-2 py-0.5 rounded bg-black/5 dark:bg-white/5 text-tg-hint">
+                      {item.formats.join(" / ").replace(/_/g, " ")}
                     </span>
                   </div>
-                  <h4 className="text-sm font-bold text-tg-text">{proj.title}</h4>
-                  <p className="text-[11px] text-tg-hint mt-0.5">
-                    {proj.stage === "proposal_sent" && `Proposal: ${proj.price} ${proj.currency} ready`}
-                    {proj.stage === "in_progress" && `Cutting: ${proj.assignedEditor.toUpperCase()}`}
-                    {proj.stage === "in_review" && "Cut delivered — tap to review"}
-                    {proj.stage === "approved" && "Final Cut Approved"}
+                  <p className="text-[11px] text-tg-hint leading-relaxed">
+                    {item.tagline}
+                  </p>
+                  <div className="flex items-center justify-between pt-1 border-t border-black/5 dark:border-white/5">
+                    <span className="text-[10px] text-tg-hint italic">
+                      Best for: {item.bestFor}
+                    </span>
+                    <button
+                      className="text-[11px] font-bold text-tg-button flex items-center gap-1"
+                      onClick={() => handleSelectStyleForBrief(k as EditingStyle)}
+                    >
+                      <span>Use Style</span>
+                      <ArrowRight01Icon className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Packages Summary */}
+            <div className="mt-6 pt-4 border-t border-black/10 dark:border-white/10 space-y-3">
+              <h3 className="text-sm font-bold text-tg-text">Package Tiers & SLAs</h3>
+              <div className="grid grid-cols-1 gap-2.5 text-xs">
+                <div className="p-3 rounded-xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 space-y-1">
+                  <div className="flex justify-between font-bold">
+                    <span>Basic Tier</span>
+                    <span className="text-tg-button">$250 - $450</span>
+                  </div>
+                  <p className="text-[11px] text-tg-hint">
+                    Fast pacing, essential sound design, clean subtitles, 2 revision rounds.
                   </p>
                 </div>
-              ))
-            )}
+
+                <div className="p-3 rounded-xl bg-tg-secondaryBg border border-tg-button/30 space-y-1">
+                  <div className="flex justify-between font-bold">
+                    <span>Professional Tier (Popular)</span>
+                    <span className="text-tg-button">$450 - $850</span>
+                  </div>
+                  <p className="text-[11px] text-tg-hint">
+                    Motion graphics, kinetic typography, bespoke SFX, 48h turnaround, 3 revision rounds.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 space-y-1">
+                  <div className="flex justify-between font-bold">
+                    <span>Premium Tier</span>
+                    <span className="text-tg-button">$850 - $1,500+</span>
+                  </div>
+                  <p className="text-[11px] text-tg-hint">
+                    Film-grade color grading, bespoke 3D/2D animation, dedicated lead editor, priority delivery.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* 5. TEAM & DIRECT CONTACT TAB */
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-sm font-bold text-tg-text">The Editing Team</h2>
+              <p className="text-xs text-tg-hint">
+                Direct access to the founders and lead editors.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div className="p-3.5 rounded-xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 space-y-2">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-black/10 dark:bg-white/10 flex items-center justify-center font-bold text-sm">
+                    A
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-tg-text">Amir</h3>
+                    <p className="text-[11px] text-tg-hint">
+                      Lead Video Editor & Creative Director
+                    </p>
+                  </div>
+                </div>
+                <p className="text-[11px] text-tg-hint">
+                  Specialized in Premiere Pro, DaVinci Resolve color pipelines, and high-retention pacing.
+                </p>
+                <button
+                  className="w-full py-2 rounded-xl bg-tg-button text-tg-buttonText font-bold text-xs active:opacity-90 transition-opacity"
+                  onClick={() => openExternal("https://t.me/Amir_Alpha_Cut")}
+                >
+                  Direct Message Amir on Telegram
+                </button>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 space-y-2">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-black/10 dark:bg-white/10 flex items-center justify-center font-bold text-sm">
+                    AY
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-tg-text">Aymen</h3>
+                    <p className="text-[11px] text-tg-hint">
+                      Full-Stack Engineer & Motion Editor
+                    </p>
+                  </div>
+                </div>
+                <p className="text-[11px] text-tg-hint">
+                  Specialized in After Effects, kinetic motion graphics, and SaaS product demos.
+                </p>
+                <button
+                  className="w-full py-2 rounded-xl bg-tg-bg border border-black/10 dark:border-white/10 text-tg-text font-bold text-xs active:opacity-90"
+                  onClick={() => openExternal("https://alpha-cut.com")}
+                >
+                  Visit Official Agency Website
+                </button>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 space-y-2 text-xs">
+              <h4 className="font-bold text-tg-text">Agency Contacts</h4>
+              <p className="text-[11px] text-tg-hint">
+                Email: alphacutagency@gmail.com
+              </p>
+              <p className="text-[11px] text-tg-hint">
+                Turnaround SLA: 24h - 48h Rapid Cuts
+              </p>
+              <p className="text-[11px] text-tg-hint">
+                Guarantee: 100% money-back if initial cut does not align with brief
+              </p>
+            </div>
           </div>
         )}
 
         {/* Revision Modal */}
         {showRevisionModal && selectedProject && (
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
-            <div className="bg-tg-bg rounded-2xl p-5 w-full max-w-sm space-y-3 border border-black/10 dark:border-white/10">
-              <h3 className="font-bold text-sm text-tg-text">Request Revisions</h3>
+            <div className="bg-tg-bg rounded-2xl p-5 w-full max-w-sm space-y-3.5 border border-black/10 dark:border-white/10">
+              <div className="flex justify-between items-center">
+                <h3 className="font-bold text-sm text-tg-text">Request Revisions</h3>
+                <button
+                  onClick={() => setShowRevisionModal(false)}
+                  className="text-tg-hint hover:text-tg-text"
+                >
+                  <Cancel01Icon className="h-4 w-4" />
+                </button>
+              </div>
               <p className="text-xs text-tg-hint">
-                Round {(selectedProject.revisionsUsed || 0) + 1} of {selectedProject.revisionsAllowed} included revisions.
+                Round {(selectedProject.revisionsUsed || 0) + 1} of {selectedProject.revisionsAllowed} included rounds.
               </p>
               <textarea
-                rows={3}
-                placeholder="Include timestamps (e.g. 0:15 text edit, 0:45 punch zoom)..."
+                rows={4}
+                placeholder="Include exact timestamps (e.g. 0:12 fix kinetic title, 0:35 replace b-roll clip)..."
                 className="w-full p-3 rounded-xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 text-tg-text text-xs focus:outline-none"
                 value={revisionText}
                 onChange={(e) => setRevisionText(e.target.value)}
               />
-              <div className="grid grid-cols-2 gap-2 pt-2">
+              <div className="grid grid-cols-2 gap-2 pt-1">
                 <button
                   className="py-2.5 rounded-xl text-xs font-semibold bg-tg-secondaryBg text-tg-text"
                   onClick={() => setShowRevisionModal(false)}
@@ -524,21 +914,22 @@ export default function App() {
                   Cancel
                 </button>
                 <button
-                  className="py-2.5 rounded-xl text-xs font-bold bg-tg-button text-tg-buttonText"
+                  disabled={actionInProgress || !revisionText.trim()}
+                  className="py-2.5 rounded-xl text-xs font-bold bg-tg-button text-tg-buttonText disabled:opacity-50"
                   onClick={handleSubmitRevision}
                 >
-                  Submit
+                  Submit Notes
                 </button>
               </div>
             </div>
           </div>
         )}
 
-        {/* Review Modal */}
+        {/* 5-Star Testimonial Modal */}
         {showReviewModal && (
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
             <div className="bg-tg-bg rounded-2xl p-5 w-full max-w-sm space-y-3 border border-black/10 dark:border-white/10 text-center">
-              <h3 className="font-bold text-sm text-tg-text">Rate Your Experience</h3>
+              <h3 className="font-bold text-sm text-tg-text">Rate the Final Cut</h3>
               <p className="text-xs text-tg-hint">How was collaborating directly with Amir and Aymen?</p>
               <div className="flex justify-center gap-2 py-2">
                 {[1, 2, 3, 4, 5].map((star) => (
@@ -560,13 +951,14 @@ export default function App() {
               </div>
               <textarea
                 rows={2}
-                placeholder="Write a brief testimonial..."
+                placeholder="Share a short testimonial for our public showcase..."
                 className="w-full p-3 rounded-xl bg-tg-secondaryBg border border-black/10 dark:border-white/10 text-tg-text text-xs focus:outline-none text-left"
                 value={reviewText}
                 onChange={(e) => setReviewText(e.target.value)}
               />
               <button
-                className="w-full py-3 rounded-xl font-bold bg-tg-button text-tg-buttonText text-xs"
+                disabled={actionInProgress}
+                className="w-full py-3 rounded-xl font-bold bg-tg-button text-tg-buttonText text-xs disabled:opacity-50"
                 onClick={handleSubmitReview}
               >
                 Submit Feedback
@@ -575,6 +967,75 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* Bottom Centum Navigation Bar */}
+      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-tg-secondaryBg border-t border-black/10 dark:border-white/10 backdrop-blur-lg">
+        <div className="max-w-lg mx-auto grid grid-cols-4 py-2 px-1">
+          <button
+            className={`flex flex-col items-center gap-1 py-1 transition-colors ${
+              activeTab === "projects" && !selectedProject
+                ? "text-tg-button font-bold"
+                : "text-tg-hint font-medium"
+            }`}
+            onClick={() => {
+              haptic("light");
+              setSelectedProject(null);
+              setActiveTab("projects");
+            }}
+          >
+            <Layers01Icon className="h-4 w-4" />
+            <span className="text-[10px]">Cuts</span>
+          </button>
+
+          <button
+            className={`flex flex-col items-center gap-1 py-1 transition-colors ${
+              activeTab === "new_brief"
+                ? "text-tg-button font-bold"
+                : "text-tg-hint font-medium"
+            }`}
+            onClick={() => {
+              haptic("light");
+              setSelectedProject(null);
+              setActiveTab("new_brief");
+            }}
+          >
+            <PlusSignIcon className="h-4 w-4" />
+            <span className="text-[10px]">New Brief</span>
+          </button>
+
+          <button
+            className={`flex flex-col items-center gap-1 py-1 transition-colors ${
+              activeTab === "styles"
+                ? "text-tg-button font-bold"
+                : "text-tg-hint font-medium"
+            }`}
+            onClick={() => {
+              haptic("light");
+              setSelectedProject(null);
+              setActiveTab("styles");
+            }}
+          >
+            <SparklesIcon className="h-4 w-4" />
+            <span className="text-[10px]">Styles</span>
+          </button>
+
+          <button
+            className={`flex flex-col items-center gap-1 py-1 transition-colors ${
+              activeTab === "team"
+                ? "text-tg-button font-bold"
+                : "text-tg-hint font-medium"
+            }`}
+            onClick={() => {
+              haptic("light");
+              setSelectedProject(null);
+              setActiveTab("team");
+            }}
+          >
+            <UserIcon className="h-4 w-4" />
+            <span className="text-[10px]">Agency</span>
+          </button>
+        </div>
+      </nav>
     </div>
   );
 }

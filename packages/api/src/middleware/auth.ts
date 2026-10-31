@@ -53,22 +53,34 @@ export function verifyRefreshToken(token: string): AuthUserPayload | null {
  * Middleware ensuring a valid user session exists
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  // Check HttpOnly cookie first, then Authorization header
+  // 1. Check HttpOnly cookie first, then Authorization header
   const token = req.cookies?.token || req.headers.authorization?.replace("Bearer ", "");
 
-  if (!token) {
-    res.status(401).json({ error: "Authentication required" });
-    return;
+  if (token) {
+    const payload = verifyAccessToken(token);
+    if (payload) {
+      req.user = payload;
+      return next();
+    }
   }
 
-  const payload = verifyAccessToken(token);
-  if (!payload) {
-    res.status(401).json({ error: "Invalid or expired session token" });
-    return;
+  // 2. Fallback to Telegram WebApp initData header
+  const initData = req.headers["x-telegram-init-data"] as string;
+  if (initData) {
+    const { isValid, user } = verifyTelegramInitData(initData);
+    if (isValid && user) {
+      req.user = {
+        userId: String(user.id),
+        email: user.username ? `${user.username}@t.me` : `tg_${user.id}@alpha-cut.com`,
+        name: `${user.first_name} ${user.last_name || ""}`.trim(),
+        role: "client",
+        telegramId: String(user.id),
+      };
+      return next();
+    }
   }
 
-  req.user = payload;
-  next();
+  res.status(401).json({ error: "Authentication required" });
 }
 
 /**

@@ -82,6 +82,29 @@ export async function sendTelegramMessage(params: {
 }
 
 /**
+ * Answers Telegram inline button callback queries
+ */
+export async function answerCallbackQuery(callbackQueryId: string, text?: string): Promise<boolean> {
+  if (!BOT_TOKEN) return true;
+  try {
+    const url = `https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        callback_query_id: callbackQueryId,
+        text,
+      }),
+    });
+    const data = await response.json();
+    return data.ok;
+  } catch (error) {
+    console.error("[Telegram API Error] Failed to answer callback query:", error);
+    return false;
+  }
+}
+
+/**
  * Dispatches an instant alert to Amir & Aymen
  */
 export async function notifyAdmins(text: string, replyMarkup?: any, parseMode?: "HTML" | "Markdown" | "MarkdownV2"): Promise<void> {

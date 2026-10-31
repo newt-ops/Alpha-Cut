@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "prebuild": "pnpm --filter @alpha-cut/types build",
-    "build": "pnpm --filter @alpha-cut/types build && tsc && vite build",
+    "build": "pnpm --filter @alpha-cut/types build && tsc && vite build && pnpm --filter miniapp build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },

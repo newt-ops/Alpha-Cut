@@ -6,6 +6,14 @@
       "destination": "https://api.alpha-cut.com/api/:match*"
     },
     {
+      "source": "/miniapp",
+      "destination": "/miniapp/index.html"
+    },
+    {
+      "source": "/miniapp/",
+      "destination": "/miniapp/index.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

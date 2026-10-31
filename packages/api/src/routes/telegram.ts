@@ -1,12 +1,12 @@
 import { Router, Request, Response } from "express";
 import { getProjectsCollection, getInquiriesCollection } from "../db.js";
-import { sendTelegramMessage } from "../services/telegram.js";
-import { EDITING_STYLES, type EditingStyle } from "@alpha-cut/types";
+import { sendTelegramMessage, answerCallbackQuery } from "../services/telegram.js";
+import { EDITING_STYLES } from "@alpha-cut/types";
 
 const router = Router();
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
 const CLIENT_URL = process.env.CLIENT_URL || "https://alpha-cut.com";
-const PORTAL_URL = `${CLIENT_URL}/portal`;
+const MINIAPP_URL = `${CLIENT_URL}/miniapp`;
 
 router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
   try {
@@ -17,16 +17,37 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const { message } = req.body;
-    if (!message || !message.text) {
+    const { message, callback_query } = req.body;
+
+    let chatId: number | string | undefined;
+    let text = "";
+    let callbackId: string | undefined;
+    let senderName = "there";
+
+    if (callback_query) {
+      chatId = callback_query.message?.chat?.id;
+      text = callback_query.data || "";
+      callbackId = callback_query.id;
+      senderName = callback_query.from?.first_name || "there";
+      // Acknowledge the callback query so loading indicator disappears
+      if (callbackId) {
+        await answerCallbackQuery(callbackId);
+      }
+    } else if (message && message.text) {
+      chatId = message.chat.id;
+      text = message.text.trim();
+      senderName = message.from?.first_name || "there";
+    } else {
       res.sendStatus(200);
       return;
     }
 
-    const chatId = message.chat.id;
-    const text = message.text.trim();
+    if (!chatId) {
+      res.sendStatus(200);
+      return;
+    }
+
     const command = text.split(" ")[0].toLowerCase();
-    const senderName = message.from?.first_name || "there";
 
     // 1. /start command & deep-linking
     if (command === "/start") {
@@ -37,14 +58,14 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
         const proposalId = param.replace("proposal_", "");
         await sendTelegramMessage({
           chatId,
-          text: `🎬 <b>Alpha Cut Project Proposal</b>\n\nReview your custom editing scope, deliverables, and package tier inside the portal.`,
+          text: `🎬 <b>Alpha Cut Project Proposal</b>\n\nReview your custom editing scope, deliverables, and package tier inside the Mini App.`,
           parseMode: "HTML",
           replyMarkup: {
             inline_keyboard: [
               [
                 {
                   text: "⚡ Review & Accept Proposal",
-                  url: `${PORTAL_URL}?proposal=${proposalId}`,
+                  web_app: { url: `${MINIAPP_URL}?proposal=${proposalId}` },
                 },
               ],
             ],
@@ -61,7 +82,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
               [
                 {
                   text: "🎬 Open Video Project",
-                  url: `${PORTAL_URL}?project=${projectId}`,
+                  web_app: { url: `${MINIAPP_URL}?project=${projectId}` },
                 },
               ],
             ],
@@ -70,25 +91,26 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       } else {
         await sendTelegramMessage({
           chatId,
-          text: `👋 Hey <b>${senderName}</b>! Welcome to <b>Alpha Cut Video Editing Agency</b> 🎬\n\nWe engineer retention-driven, cinematic video edits for creators, founders, and modern brands.\n\n<b>Quick Commands:</b>\n• /status — Check live pipeline capacity\n• /packages — View editing tiers & rates\n• /styles — Browse signature editing styles\n• /projects — View active video contracts\n• /about — Meet founders Amir & Aymen\n\nTap below to launch your client portal or submit a new brief:`,
+          text: `👋 Hey <b>${senderName}</b>! Welcome to <b>Alpha Cut Video Editing Agency</b> 🎬\n\nWe engineer retention-driven, cinematic video edits for creators, founders, and modern brands.\n\n<b>Quick Commands:</b>\n• /status — Check live pipeline capacity\n• /packages — View editing tiers & rates\n• /styles — Browse signature editing styles\n• /projects — View active video contracts\n• /about — Meet founders Amir & Aymen\n\nTap below to launch your Mini App portal or submit a new brief:`,
           parseMode: "HTML",
           replyMarkup: {
             inline_keyboard: [
               [
-                { text: "🚀 Open Client Portal", url: PORTAL_URL },
-                { text: "📝 Submit New Brief", url: `${CLIENT_URL}#inquiry` },
+                { text: "🚀 Open Mini App", web_app: { url: MINIAPP_URL } },
+                { text: "📝 Submit New Brief", web_app: { url: `${MINIAPP_URL}?tab=new_brief` } },
               ],
               [
                 { text: "🌐 Visit Official Website", url: CLIENT_URL },
+                { text: "💬 Chat with Amir", url: "https://t.me/Amir_Alpha_Cut" },
               ],
             ],
           },
         });
       }
-    } 
+    }
 
-    // 2. /menu command
-    else if (command === "/menu") {
+    // 2. /menu command or callback
+    else if (command === "/menu" || command === "cmd_menu") {
       await sendTelegramMessage({
         chatId,
         text: `🎛 <b>Alpha Cut Agency Menu</b>\n\nSelect an option below to manage projects, review editing packages, or check pipeline status:`,
@@ -104,7 +126,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
               { text: "🎨 Editing Styles", callback_data: "cmd_styles" },
             ],
             [
-              { text: "🚀 Open Client Workspace", url: PORTAL_URL },
+              { text: "🚀 Open Mini App", web_app: { url: MINIAPP_URL } },
               { text: "ℹ️ About Agency", callback_data: "cmd_about" },
             ],
           ],
@@ -112,8 +134,8 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       });
     }
 
-    // 3. /status command
-    else if (command === "/status") {
+    // 3. /status command or callback
+    else if (command === "/status" || command === "cmd_status") {
       const projects = getProjectsCollection();
       const inquiries = getInquiriesCollection();
 
@@ -128,14 +150,17 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
         parseMode: "HTML",
         replyMarkup: {
           inline_keyboard: [
-            [{ text: "📝 Submit Video Brief", url: `${CLIENT_URL}#inquiry` }],
+            [
+              { text: "📝 Submit Video Brief", web_app: { url: `${MINIAPP_URL}?tab=new_brief` } },
+              { text: "🚀 Open Mini App", web_app: { url: MINIAPP_URL } },
+            ],
           ],
         },
       });
     }
 
-    // 4. /projects command
-    else if (command === "/projects") {
+    // 4. /projects command or callback
+    else if (command === "/projects" || command === "cmd_projects") {
       const projects = getProjectsCollection();
       const list = await projects
         .find({ stage: { $ne: "completed" } })
@@ -149,7 +174,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
           parseMode: "HTML",
           replyMarkup: {
             inline_keyboard: [
-              [{ text: "⚡ Submit New Brief", url: `${CLIENT_URL}#inquiry` }],
+              [{ text: "⚡ Submit New Brief", web_app: { url: `${MINIAPP_URL}?tab=new_brief` } }],
             ],
           },
         });
@@ -165,15 +190,15 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
           parseMode: "HTML",
           replyMarkup: {
             inline_keyboard: [
-              [{ text: "🚀 Open Client Portal", url: PORTAL_URL }],
+              [{ text: "🚀 Open Projects in Mini App", web_app: { url: MINIAPP_URL } }],
             ],
           },
         });
       }
     }
 
-    // 5. /deadlines command
-    else if (command === "/deadlines") {
+    // 5. /deadlines command or callback
+    else if (command === "/deadlines" || command === "cmd_deadlines") {
       const projects = getProjectsCollection();
       const now = new Date();
       const twoDaysFromNow = new Date(now.getTime() + 48 * 60 * 60 * 1000);
@@ -203,8 +228,8 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       }
     }
 
-    // 6. /packages command
-    else if (command === "/packages") {
+    // 6. /packages command or callback
+    else if (command === "/packages" || command === "cmd_packages") {
       await sendTelegramMessage({
         chatId,
         text: `💎 <b>Alpha Cut Editing Packages & Rates</b>\n\n<b>1. Basic Tier — $250 - $450</b>\n• Fast pacing & clean rhythm\n• Essential sound design & audio mastering\n• Clean subtitles & color balancing\n• 2 revision rounds\n\n<b>2. Professional Tier — $450 - $850 (Most Popular)</b>\n• Dynamic motion graphics & kinetic typography\n• Retention pattern interrupts & bespoke sound FX\n• 2 custom thumbnail variants included\n• 3 revision rounds + 48h turnaround\n\n<b>3. Premium Tier — $850 - $1,500+</b>\n• Film-grade color grading & bespoke animation\n• Multi-hook A/B testing package\n• Dedicated lead editor (Amir or Aymen)\n• Unlimited revision priority & VIP communication\n\n<i>All packages include 100% money-back guarantee if initial cut does not align with brief.</i>`,
@@ -212,17 +237,17 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
         replyMarkup: {
           inline_keyboard: [
             [
-              { text: "📝 Request Custom Quote", url: `${CLIENT_URL}#inquiry` },
-              { text: "🚀 Launch Portal", url: PORTAL_URL },
+              { text: "📝 Submit Brief", web_app: { url: `${MINIAPP_URL}?tab=new_brief` } },
+              { text: "🚀 Launch Mini App", web_app: { url: MINIAPP_URL } },
             ],
           ],
         },
       });
     }
 
-    // 7. /styles command
-    else if (command === "/styles") {
-      const styleItems = Object.entries(EDITING_STYLES).map(([key, item]) => {
+    // 7. /styles command or callback
+    else if (command === "/styles" || command === "cmd_styles") {
+      const styleItems = Object.entries(EDITING_STYLES).map(([, item]) => {
         return `• <b>${item.label}</b>\n  ${item.tagline}\n  <i>Best for: ${item.bestFor}</i>`;
       });
 
@@ -232,14 +257,14 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
         parseMode: "HTML",
         replyMarkup: {
           inline_keyboard: [
-            [{ text: "🎬 Choose Style & Submit Brief", url: `${CLIENT_URL}#inquiry` }],
+            [{ text: "🎬 Choose Style & Submit Brief", web_app: { url: `${MINIAPP_URL}?tab=styles` } }],
           ],
         },
       });
     }
 
-    // 8. /about command
-    else if (command === "/about") {
+    // 8. /about command or callback
+    else if (command === "/about" || command === "cmd_about") {
       await sendTelegramMessage({
         chatId,
         text: `ℹ️ <b>About Alpha Cut Agency</b>\n\nAlpha Cut is a boutique video editing agency founded and operated by:\n\n• <b>Amir</b> — Lead Video Editor & Creative Director (Mastery in Premiere Pro, DaVinci Resolve & narrative pacing).\n• <b>Aymen</b> — Full-Stack Engineer & Motion Editor (Specialized in After Effects, kinetic typography & SaaS product animations).\n\n<b>Our Mission:</b>\nTurn raw footage into high-retention digital assets that build authority and drive conversions.\n\n🌐 <b>Website:</b> <a href="${CLIENT_URL}">alpha-cut.com</a>\n📧 <b>Email:</b> alphacutagency@gmail.com`,
@@ -247,14 +272,14 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
         replyMarkup: {
           inline_keyboard: [
             [{ text: "🌐 Explore Portfolio", url: `${CLIENT_URL}#portfolio` }],
-            [{ text: "💬 Direct Support", url: "https://t.me/alpha_cut_bot" }],
+            [{ text: "💬 Chat with Amir", url: "https://t.me/Amir_Alpha_Cut" }],
           ],
         },
       });
     }
 
-    // 9. /help command
-    else if (command === "/help") {
+    // 9. /help command or callback
+    else if (command === "/help" || command === "cmd_help") {
       await sendTelegramMessage({
         chatId,
         text: `📖 <b>Alpha Cut Bot Help & Commands</b>\n\nHere are the commands you can use anytime:\n\n/start — Launch the welcome message & portal links\n/menu — Open interactive control menu\n/status — Check live editing queue & turnaround\n/packages — Review pricing tiers & inclusions\n/styles — Explore our 5 signature video styles\n/projects — View active production pipeline\n/deadlines — Check deliverable deadlines\n/about — Meet founders Amir & Aymen\n\nNeed to submit footage or check an existing order?\nUse the button below:`,
@@ -262,8 +287,8 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
         replyMarkup: {
           inline_keyboard: [
             [
-              { text: "🚀 Open Client Portal", url: PORTAL_URL },
-              { text: "📝 Submit New Brief", url: `${CLIENT_URL}#inquiry` },
+              { text: "🚀 Open Mini App", web_app: { url: MINIAPP_URL } },
+              { text: "📝 Submit New Brief", web_app: { url: `${MINIAPP_URL}?tab=new_brief` } },
             ],
           ],
         },
@@ -279,7 +304,7 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
         replyMarkup: {
           inline_keyboard: [
             [
-              { text: "🚀 Open Client Portal", url: PORTAL_URL },
+              { text: "🚀 Open Mini App", web_app: { url: MINIAPP_URL } },
               { text: "📊 Check Queue Status", callback_data: "cmd_status" },
             ],
             [
