@@ -12,7 +12,12 @@ export async function connectDB(): Promise<Db> {
   if (db) return db;
 
   try {
-    client = new MongoClient(uri);
+    client = new MongoClient(uri, {
+      maxPoolSize: 10,
+      minPoolSize: 2,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+    });
     await client.connect();
     db = client.db();
     console.log("[MongoDB] Connected successfully to database:", db.databaseName);
