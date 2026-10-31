@@ -15,8 +15,8 @@
     "@telegram-apps/sdk-react": "^2.0.22",
     "clsx": "^2.1.1",
     "hugeicons-react": "^0.4.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
     "tailwind-merge": "^3.0.2"
   },
   "devDependencies": {

@@ -14,6 +14,30 @@
   </head>
   <body class="bg-[#F5F5F7] dark:bg-[#161412] text-[#181818] dark:text-[#F5F3EC] antialiased min-h-screen selection:bg-brand-brown selection:text-brand-cream">
     <div id="root"></div>
+    <script>
+      window.addEventListener('error', function(e) {
+        console.error('Captured window error:', e);
+        var el = document.getElementById('alpha-cut-fatal-error');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'alpha-cut-fatal-error';
+          el.style.cssText = 'position:fixed;top:0;left:0;right:0;padding:24px;background:#fee2e2;color:#991b1b;font-family:monospace;font-size:13px;z-index:999999;border-bottom:2px solid #ef4444;white-space:pre-wrap;box-shadow:0 10px 25px rgba(0,0,0,0.2);';
+          document.body.prepend(el);
+        }
+        el.innerText = 'Alpha Cut Runtime Error:\n' + (e.error ? (e.error.stack || e.error.message) : e.message) + '\n\nLocation: ' + e.filename + ':' + e.lineno + ':' + e.colno;
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        console.error('Unhandled rejection:', e.reason);
+        var el = document.getElementById('alpha-cut-fatal-error');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'alpha-cut-fatal-error';
+          el.style.cssText = 'position:fixed;top:0;left:0;right:0;padding:24px;background:#fef3c7;color:#92400e;font-family:monospace;font-size:13px;z-index:999999;border-bottom:2px solid #f59e0b;white-space:pre-wrap;box-shadow:0 10px 25px rgba(0,0,0,0.2);';
+          document.body.prepend(el);
+        }
+        el.innerText = 'Alpha Cut Unhandled Promise Rejection:\n' + (e.reason ? (e.reason.stack || e.reason.message || e.reason) : 'Unknown rejection');
+      });
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Folder01Icon } from "hugeicons-react";
-import { cn } from "../utils.js";
+import { cn } from "../utils";
 
 export interface EmptyStateProps {
   icon?: React.ReactNode;
