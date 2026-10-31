@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: alpha-cut-api
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @alpha-cut/types build && pnpm --filter @alpha-cut/api build
+    startCommand: node packages/api/dist/server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: CLIENT_URL
+        value: https://alpha-cut-nine.vercel.app
+      - key: SERVER_URL
+        value: https://alpha-cut.onrender.com
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        value: alpha_cut_bot
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: TELEGRAM_ADMIN_CHAT_ID
+        value: "8695891474"
+      - key: RESEND_API_KEY
+        sync: false
+      - key: ADMIN_EMAILS
+        value: alphacutagency@gmail.com
+      - key: CLOUDINARY_CLOUD_NAME
+        value: focvgcan
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
