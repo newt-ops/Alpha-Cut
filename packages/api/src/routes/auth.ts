@@ -105,12 +105,17 @@ router.post("/login", async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const role = ADMIN_EMAILS.includes(normalizedEmail) ? "super_admin" : (user.role || "client");
+    if (user.role !== role) {
+      await users.updateOne({ _id: user._id }, { $set: { role, updatedAt: new Date() } });
+    }
+
     const userId = user._id ? user._id.toString() : "";
     const token = signAccessToken({
       userId,
       email: user.email,
       name: user.name,
-      role: user.role,
+      role,
     });
 
     setAuthCookie(res, token);
@@ -119,7 +124,7 @@ router.post("/login", async (req: Request, res: Response): Promise<void> => {
         id: userId,
         name: user.name,
         email: user.email,
-        role: user.role,
+        role,
         telegramUsername: user.telegramUsername,
       },
       token,
@@ -142,3 +147,4 @@ router.post("/logout", (_req: Request, res: Response): void => {
 });
 
 export default router;
+

@@ -71,7 +71,11 @@ router.get("/:id", requireAuth, async (req: Request, res: Response): Promise<voi
 router.post("/", requireAuth, async (req: Request, res: Response): Promise<void> => {
   try {
     const user = req.user!;
+    const defaultDeadline = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
     const parseResult = ProjectSchema.omit({ _id: true }).safeParse({
+      price: 0,
+      revisionsAllowed: 2,
+      deadline: defaultDeadline,
       ...req.body,
       clientId: user.userId,
       clientName: user.name,
@@ -222,12 +226,12 @@ router.patch("/:id/delivery", requireAuth, requireRole(["super_admin"]), async (
   }
 });
 
-// POST /api/projects/:id/request-revision (Client submits revision feedback)
-router.post("/:id/request-revision", requireAuth, async (req: Request, res: Response): Promise<void> => {
+// POST /api/projects/:id/request-revision & /:id/revision (Client submits revision feedback)
+const handleRevisionRequest = async (req: Request, res: Response): Promise<void> => {
   try {
     const user = req.user!;
     const { id } = req.params;
-    const { feedback } = req.body;
+    const feedback = req.body.feedback || req.body.notes;
 
     if (!feedback || feedback.trim().length < 5) {
       res.status(400).json({ error: "Please provide revision details" });
@@ -278,7 +282,10 @@ router.post("/:id/request-revision", requireAuth, async (req: Request, res: Resp
     console.error("[Revision Request Error]:", error);
     res.status(500).json({ error: "Failed to request revision" });
   }
-});
+};
+
+router.post("/:id/request-revision", requireAuth, handleRevisionRequest);
+router.post("/:id/revision", requireAuth, handleRevisionRequest);
 
 // POST /api/projects/:id/approve (Client approves final cut)
 router.post("/:id/approve", requireAuth, async (req: Request, res: Response): Promise<void> => {
@@ -299,15 +306,17 @@ router.post("/:id/approve", requireAuth, async (req: Request, res: Response): Pr
     }
 
     const now = new Date();
+    const update: any = {
+      stage: "approved",
+      approvedAt: now,
+      updatedAt: now,
+    };
+    if (req.body?.rating) update.rating = Number(req.body.rating);
+    if (req.body?.testimonial) update.testimonial = req.body.testimonial;
+
     await projects.updateOne(
       { _id: new ObjectId(id) as any },
-      {
-        $set: {
-          stage: "approved",
-          approvedAt: now,
-          updatedAt: now,
-        },
-      }
+      { $set: update }
     );
 
     notifyAdmins(
@@ -367,16 +376,16 @@ router.post("/:id/review", requireAuth, async (req: Request, res: Response): Pro
   }
 });
 
-// PATCH /api/projects/:id/featured (Admin toggles website publishing)
-router.patch("/:id/featured", requireAuth, requireRole(["super_admin"]), async (req: Request, res: Response): Promise<void> => {
+// PATCH /api/projects/:id/featured & /:id/feature-toggle (Admin toggles website publishing)
+const handleFeatureToggle = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { featuredOnWebsite } = req.body;
+    const isFeatured = req.body.featuredOnWebsite !== undefined ? req.body.featuredOnWebsite : req.body.featured;
 
     const projects = getProjectsCollection();
     await projects.updateOne(
       { _id: new ObjectId(id) as any },
-      { $set: { featuredOnWebsite: Boolean(featuredOnWebsite), updatedAt: new Date() } }
+      { $set: { featuredOnWebsite: Boolean(isFeatured), updatedAt: new Date() } }
     );
 
     res.json({ message: "Review display status updated" });
@@ -384,6 +393,10 @@ router.patch("/:id/featured", requireAuth, requireRole(["super_admin"]), async (
     console.error("[Featured Review Error]:", error);
     res.status(500).json({ error: "Failed to update review status" });
   }
-});
+};
+
+router.patch("/:id/featured", requireAuth, requireRole(["super_admin"]), handleFeatureToggle);
+router.patch("/:id/feature-toggle", requireAuth, requireRole(["super_admin"]), handleFeatureToggle);
 
 export default router;
+

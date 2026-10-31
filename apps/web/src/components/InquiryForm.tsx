@@ -184,3 +184,4 @@ export function InquiryForm() {
     </section>
   );
 }
+

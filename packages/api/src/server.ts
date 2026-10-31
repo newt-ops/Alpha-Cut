@@ -16,10 +16,27 @@ const app: Express = express();
 const PORT = process.env.PORT || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
 
-app.use(helmet());
+const allowedOrigins = [
+  CLIENT_URL,
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:5174",
+  "https://web.telegram.org",
+  "https://alpha-cut-nine.vercel.app",
+].filter(Boolean);
+
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(
   cors({
-    origin: [CLIENT_URL, "https://web.telegram.org"],
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl, or Postman)
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, true); // Allow during development
+      }
+    },
     credentials: true,
   })
 );

@@ -50,3 +50,4 @@ export function getInvoicesCollection(): Collection<Invoice> {
 export function getExpensesCollection(): Collection<Expense> {
   return getDB().collection<Expense>("expenses");
 }
+

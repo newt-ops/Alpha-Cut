@@ -131,3 +131,4 @@ export function Pricing() {
     </section>
   );
 }
+

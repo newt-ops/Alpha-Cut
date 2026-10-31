@@ -55,3 +55,4 @@ export async function sendInquiryConfirmationEmail(params: {
     console.error(`[Email Error] Failed to send email to ${params.to}:`, error);
   }
 }
+
