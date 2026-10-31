@@ -4,7 +4,12 @@
     "jsx": "react-jsx",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@alpha-cut/types": ["../../packages/types/src/index.ts"],
+      "@alpha-cut/config": ["../../packages/config/src/index.ts"],
+      "@alpha-cut/ui": ["../../packages/ui/src/index.ts"]
+    }
   },
   "include": ["src/**/*"]
 }

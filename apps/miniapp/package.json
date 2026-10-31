@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "prebuild": "pnpm --filter @alpha-cut/types build",
+    "build": "pnpm --filter @alpha-cut/types build && tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
